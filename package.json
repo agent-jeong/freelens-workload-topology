@@ -1,0 +1,43 @@
+{
+  "name": "freelens-workload-topology",
+  "version": "1.0.0",
+  "description": "Freelens extension for Kubernetes workload topology visualization",
+  "packageManager": "pnpm@10.33.2",
+  "main": "out/main/index.js",
+  "renderer": "out/renderer/index.js",
+  "files": [
+    "out/**/*"
+  ],
+  "engines": {
+    "node": ">=22.16.0",
+    "freelens": "^1.6.0"
+  },
+  "license": "MIT",
+  "keywords": [
+    "freelens",
+    "freelensapp",
+    "extension",
+    "kubernetes",
+    "topology"
+  ],
+  "scripts": {
+    "build": "electron-vite build",
+    "type:check": "tsc --noEmit -p tsconfig.json --composite false"
+  },
+  "devDependencies": {
+    "@freelensapp/extensions": "^1.6.1",
+    "@types/node": "~22.15.35",
+    "@types/react": "^17.0.90",
+    "@vitejs/plugin-react": "^5.1.1",
+    "electron-vite": "^4.0.1",
+    "react": "17.0.2",
+    "react-dom": "17.0.2",
+    "sass": "^1.94.1",
+    "typescript": "5.9.3",
+    "vite": "^7.2.2",
+    "vite-plugin-external": "^6.2.2"
+  },
+  "dependencies": {
+    "yaml": "^2.8.3"
+  }
+}
