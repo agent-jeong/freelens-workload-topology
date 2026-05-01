@@ -80,6 +80,110 @@ export const topologyStyles = `
   color: var(--colorError);
 }
 
+.IssuePanel {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 12px;
+  margin: 12px 18px 0;
+  padding: 10px 12px;
+  background: var(--contentColor);
+  border: 1px solid var(--borderColor);
+  border-radius: 6px;
+}
+
+.IssuePanel__summary {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.IssuePanel__summary span {
+  color: var(--textColorSecondary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.IssuePanel__summary strong {
+  color: var(--textColorPrimary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.IssuePanel__list {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+  overflow: auto;
+}
+
+.IssuePanel__item {
+  display: grid;
+  grid-template-rows: auto auto auto;
+  gap: 3px;
+  width: 190px;
+  min-width: 190px;
+  padding: 8px 9px;
+  color: var(--textColorPrimary);
+  text-align: left;
+  background: var(--layoutBackground);
+  border: 1px solid var(--borderColor);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.IssuePanel__item:hover {
+  border-color: #7fb4ff;
+}
+
+.IssuePanel__item.is-danger {
+  border-left: 3px solid #d44848;
+}
+
+.IssuePanel__item.is-warning {
+  border-left: 3px solid #d99b20;
+}
+
+.IssuePanel__item span {
+  overflow: hidden;
+  color: var(--textColorSecondary);
+  font-size: 10px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.IssuePanel__item strong {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.IssuePanel__item em {
+  overflow: hidden;
+  color: var(--textColorSecondary);
+  font-size: 11px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.IssuePanel__empty,
+.IssuePanel__more {
+  display: flex;
+  align-items: center;
+  color: var(--textColorSecondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .WorkloadTopology__body {
   display: flex;
   min-height: 0;
@@ -432,6 +536,26 @@ export const topologyStyles = `
   white-space: nowrap;
 }
 
+.TopologyCard__problem {
+  overflow: hidden;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--borderColor);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.TopologyCard__problem.is-warning {
+  color: #d99b20;
+}
+
+.TopologyCard__problem.is-danger {
+  color: #d44848;
+}
+
 .TopologyDetails {
   position: relative;
   display: flex;
@@ -568,6 +692,155 @@ export const topologyStyles = `
   line-height: 1.4;
 }
 
+.TopologyDetails__sectionTitle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  color: var(--textColorSecondary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.TopologyDetails__sectionTitle span {
+  color: var(--textColorSecondary);
+  font-weight: 600;
+}
+
+.TopologyDetails__problems {
+  margin: 10px 14px 0;
+  padding: 10px;
+  background: rgba(212, 72, 72, 0.08);
+  border: 1px solid rgba(212, 72, 72, 0.25);
+  border-radius: 4px;
+}
+
+.TopologyDetails__problem {
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.TopologyDetails__problem + .TopologyDetails__problem {
+  margin-top: 6px;
+}
+
+.TopologyDetails__problem.is-warning {
+  color: #d99b20;
+}
+
+.TopologyDetails__problem.is-danger {
+  color: #d44848;
+}
+
+.TopologyDetails__causeHints {
+  margin: 10px 14px 0;
+  padding: 10px;
+  background: rgba(127, 180, 255, 0.08);
+  border: 1px solid rgba(127, 180, 255, 0.25);
+  border-radius: 4px;
+}
+
+.TopologyDetails__causeHint {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.TopologyDetails__causeHint + .TopologyDetails__causeHint {
+  margin-top: 7px;
+}
+
+.TopologyDetails__causeHint strong {
+  overflow: hidden;
+  color: #7fb4ff;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.TopologyDetails__causeHint span {
+  color: var(--textColorPrimary);
+}
+
+.TopologyDetails__events {
+  padding: 10px 14px;
+  overflow: auto;
+  border-bottom: 1px solid var(--borderColor);
+}
+
+.TopologyDetails__events--preview {
+  max-height: none;
+  border-bottom: 0;
+}
+
+.TopologyDetails__events--full {
+  flex: 1;
+  min-height: 0;
+}
+
+.TopologyDetails__eventEmpty {
+  color: var(--textColorSecondary);
+  font-size: 12px;
+}
+
+.TopologyDetails__event {
+  padding: 8px 0;
+  border-top: 1px solid var(--borderColor);
+}
+
+.TopologyDetails__event:first-of-type {
+  border-top: 0;
+}
+
+.TopologyDetails__event.is-warning strong {
+  color: #d99b20;
+}
+
+.TopologyDetails__eventHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.TopologyDetails__eventHeader strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.TopologyDetails__eventHeader span {
+  flex-shrink: 0;
+  color: var(--textColorSecondary);
+  font-size: 11px;
+}
+
+.TopologyDetails__event p {
+  margin: 5px 0 0;
+  color: var(--textColorPrimary);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.TopologyDetails__event small {
+  display: block;
+  margin-top: 4px;
+  color: var(--textColorSecondary);
+  font-size: 11px;
+}
+
+.TopologyDetails__eventMore {
+  padding: 8px 0 0;
+  color: var(--textColorSecondary);
+  font-size: 12px;
+}
+
 .TopologyDetails__row {
   display: grid;
   grid-template-columns: 96px minmax(0, 1fr);
@@ -654,6 +927,18 @@ export const topologyStyles = `
   flex-direction: column;
   min-height: 0;
   flex: 1;
+}
+
+.TopologyDetails__inspect {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 12px;
+}
+
+.TopologyDetails__inspect .TopologyDetails__problems,
+.TopologyDetails__inspect .TopologyDetails__causeHints {
+  margin-top: 12px;
 }
 
 .TopologyDetails__summary {
@@ -1013,12 +1298,25 @@ export const topologyStyles = `
 
 .TopologyDetails__tabs {
   display: flex;
-  gap: 8px;
-  padding: 12px 14px 0;
+  gap: 6px;
+  padding: 12px 14px 8px;
+  border-bottom: 1px solid var(--borderColor);
+}
+
+.TopologyDetails__tabs button {
+  flex: 1;
+  min-width: 0;
 }
 
 .TopologyDetails__tabs button.is-active {
   border-color: #4b7bec;
+}
+
+.TopologyDetails__yamlView {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
 }
 
 .CodeEditor {
@@ -1291,7 +1589,8 @@ export const topologyStyles = `
   font-size: 12px;
 }
 
-.PodLogsModal__podFilter {
+.PodLogsModal__podFilter,
+.PodLogsModal__hiddenFilter {
   position: relative;
   display: flex;
   align-items: center;
@@ -1300,14 +1599,16 @@ export const topologyStyles = `
   font-size: 12px;
 }
 
-.PodLogsModal__podFilter > button {
+.PodLogsModal__podFilter > button,
+.PodLogsModal__hiddenFilter > button {
   max-width: 190px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.PodLogsModal__podMenu {
+.PodLogsModal__podMenu,
+.PodLogsModal__hiddenMenu {
   position: absolute;
   top: 34px;
   left: 28px;
@@ -1321,6 +1622,45 @@ export const topologyStyles = `
   border: 1px solid var(--borderColor);
   border-radius: 4px;
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.32);
+}
+
+.PodLogsModal__hiddenMenu {
+  left: 44px;
+  width: 360px;
+}
+
+.PodLogsModal__hiddenActions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px 4px 6px;
+  border-bottom: 1px solid var(--borderColor);
+  margin-bottom: 4px;
+}
+
+.PodLogsModal__hiddenItem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 26px;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 7px;
+  border-radius: 3px;
+}
+
+.PodLogsModal__hiddenItem:hover {
+  background: rgba(127, 180, 255, 0.08);
+}
+
+.PodLogsModal__hiddenItem span {
+  overflow: hidden;
+  color: var(--textColorPrimary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.PodLogsModal__hiddenItem button {
+  width: 24px;
+  min-width: 24px;
+  padding: 0;
 }
 
 .PodLogsModal__podMenu label {

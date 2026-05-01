@@ -23,6 +23,56 @@ type KubeObjectLike = {
   status?: any;
 };
 
+type KubeEventLike = KubeObjectLike & {
+  action?: string;
+  count?: number;
+  deprecatedCount?: number;
+  deprecatedFirstTimestamp?: string;
+  deprecatedLastTimestamp?: string;
+  deprecatedSource?: {
+    component?: string;
+    host?: string;
+  };
+  eventTime?: string;
+  firstTimestamp?: string;
+  involvedObject?: {
+    kind?: string;
+    name?: string;
+    namespace?: string;
+    uid?: string;
+  };
+  lastTimestamp?: string;
+  message?: string;
+  note?: string;
+  regarding?: {
+    kind?: string;
+    name?: string;
+    namespace?: string;
+    uid?: string;
+  };
+  reason?: string;
+  reportingComponent?: string;
+  reportingController?: string;
+  series?: {
+    count?: number;
+    lastObservedTime?: string;
+  };
+  source?: {
+    component?: string;
+    host?: string;
+  };
+};
+
+type ProblemReason = {
+  severity: "warning" | "danger";
+  message: string;
+};
+
+type CauseHint = {
+  reason: string;
+  message: string;
+};
+
 type ResourceSet = {
   ingresses: KubeObjectLike[];
   services: KubeObjectLike[];
@@ -32,6 +82,7 @@ type ResourceSet = {
   pods: KubeObjectLike[];
   configMaps: KubeObjectLike[];
   secrets: KubeObjectLike[];
+  events: KubeEventLike[];
 };
 
 type TopologyNode = {
@@ -45,11 +96,8 @@ type TopologyNode = {
   y: number;
   object: KubeObjectLike;
   editable: boolean;
+  problems?: ProblemReason[];
   pods?: KubeObjectLike[];
-  metrics?: {
-    cpu: number;    // in cores
-    memory: number; // in MiB
-  };
 };
 
 type TopologyEdge = {
@@ -66,48 +114,6 @@ type ViewportSize = {
 type KubeApiLike = {
   update: (descriptor: { name: string; namespace?: string }, data: any) => Promise<unknown>;
 };
-
-export interface PodMetrics {
-  metadata: { name: string; namespace: string; creationTimestamp: string };
-  timestamp: string;
-  window: string;
-  containers: {
-    name: string;
-    usage: { cpu: string; memory: string };
-  }[];
-}
-
-export interface PodMetricsList {
-  kind: "PodMetricsList";
-  apiVersion: "metrics.k8s.io/v1beta1";
-  metadata: { selfLink: string };
-  items: PodMetrics[];
-}
-
-export function parseK8sCpu(value: string): number {
-  if (!value) return 0;
-  if (value.endsWith('n')) return parseInt(value, 10) / 1e9; // nanocores -> cores
-  if (value.endsWith('u')) return parseInt(value, 10) / 1e6; // microcores
-  if (value.endsWith('m')) return parseInt(value, 10) / 1e3; // millicores
-  return parseFloat(value);
-}
-
-export function parseK8sMemory(value: string): number {
-  if (!value) return 0;
-  // Convert to MiB
-  if (value.endsWith('Ki')) return parseInt(value, 10) / 1024;
-  if (value.endsWith('Mi')) return parseInt(value, 10);
-  if (value.endsWith('Gi')) return parseInt(value, 10) * 1024;
-  if (value.endsWith('Ti')) return parseInt(value, 10) * 1024 * 1024;
-  if (value.endsWith('Pi')) return parseInt(value, 10) * 1024 * 1024 * 1024;
-  if (value.endsWith('Ei')) return parseInt(value, 10) * 1024 * 1024 * 1024 * 1024;
-  // SI units
-  if (value.endsWith('k')) return parseInt(value, 10) * 1000 / (1024 * 1024);
-  if (value.endsWith('M')) return parseInt(value, 10) * 1000 * 1000 / (1024 * 1024);
-  if (value.endsWith('G')) return parseInt(value, 10) * 1000 * 1000 * 1000 / (1024 * 1024);
-  // raw bytes
-  return parseInt(value, 10) / (1024 * 1024);
-}
 
 type PodLogEntry = {
   podName: string;
@@ -184,6 +190,10 @@ function getName(object: KubeObjectLike): string {
 
 function getNamespace(object: KubeObjectLike): string {
   return object.getNamespace?.() ?? object.metadata?.namespace ?? "default";
+}
+
+function getEventNamespace(event: KubeEventLike): string {
+  return event.involvedObject?.namespace ?? event.regarding?.namespace ?? getNamespace(event);
 }
 
 function getLabels(object: KubeObjectLike): Record<string, string> | undefined {
@@ -1116,7 +1126,8 @@ function filterByNamespace(resources: ResourceSet, namespace: string): ResourceS
     jobs: resources.jobs.filter((resource) => getNamespace(resource) === namespace),
     pods: resources.pods.filter((resource) => getNamespace(resource) === namespace),
     configMaps: resources.configMaps.filter((resource) => getNamespace(resource) === namespace),
-    secrets: resources.secrets.filter((resource) => getNamespace(resource) === namespace)
+    secrets: resources.secrets.filter((resource) => getNamespace(resource) === namespace),
+    events: resources.events.filter((event) => getEventNamespace(event) === namespace)
   };
 }
 
@@ -1126,8 +1137,22 @@ function namespaceOptions(resources: ResourceSet, namespaces: string[]) {
   Object.values(resources).forEach((items) => {
     items.forEach((item) => values.add(getNamespace(item)));
   });
+  resources.events.forEach((event) => values.add(getEventNamespace(event)));
 
   return [...values].sort((left, right) => left.localeCompare(right));
+}
+
+function visibleResourceCount(resources: ResourceSet): number {
+  return (
+    resources.ingresses.length +
+    resources.services.length +
+    resources.deployments.length +
+    resources.cronJobs.length +
+    resources.jobs.length +
+    resources.pods.length +
+    resources.configMaps.length +
+    resources.secrets.length
+  );
 }
 
 function serviceSelector(service: KubeObjectLike): Record<string, string> | undefined {
@@ -1247,7 +1272,155 @@ function podStatus(pod: KubeObjectLike): TopologyStatus {
   return "unknown";
 }
 
-function buildTopology(resources: ResourceSet, cronJobWindowHours: number, podMetrics: Record<string, { cpu: number; memory: number }>) {
+function uniqueProblems(problems: ProblemReason[]): ProblemReason[] {
+  const seen = new Set<string>();
+
+  return problems.filter((problem) => {
+    const key = `${problem.severity}:${problem.message}`;
+
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
+}
+
+function podProblemReasons(pod: KubeObjectLike): ProblemReason[] {
+  const problems: ProblemReason[] = [];
+  const status = pod.getStatus?.() ?? pod.status?.phase ?? "Unknown";
+
+  if (status === "Failed") {
+    problems.push({ severity: "danger", message: "Pod phase is Failed" });
+  } else if (status === "Pending" || status === "ContainerCreating") {
+    problems.push({ severity: "warning", message: `Pod is ${status}` });
+  }
+
+  for (const container of pod.status?.containerStatuses ?? []) {
+    const waiting = container.state?.waiting;
+    const terminated = container.state?.terminated;
+
+    if (waiting?.reason) {
+      problems.push({
+        severity: waiting.reason === "CrashLoopBackOff" ? "danger" : "warning",
+        message: `${container.name ?? "container"} waiting: ${waiting.reason}${waiting.message ? ` - ${waiting.message}` : ""}`
+      });
+    }
+
+    if (terminated?.reason && terminated.reason !== "Completed") {
+      problems.push({
+        severity: terminated.exitCode && terminated.exitCode !== 0 ? "danger" : "warning",
+        message: `${container.name ?? "container"} terminated: ${terminated.reason}${terminated.exitCode !== undefined ? ` (exit ${terminated.exitCode})` : ""}`
+      });
+    }
+
+    if ((container.restartCount ?? 0) > 0) {
+      problems.push({ severity: "warning", message: `${container.name ?? "container"} restarted ${container.restartCount} time(s)` });
+    }
+  }
+
+  return uniqueProblems(problems);
+}
+
+function deploymentProblemReasons(deployment: KubeObjectLike): ProblemReason[] {
+  const desired = deployment.spec?.replicas ?? 1;
+  const available = deployment.status?.availableReplicas ?? 0;
+  const unavailable = deployment.status?.unavailableReplicas ?? 0;
+  const problems: ProblemReason[] = [];
+
+  if (desired === 0) {
+    problems.push({ severity: "warning", message: "Deployment is scaled to 0 replicas" });
+  } else if (available < desired) {
+    problems.push({ severity: "danger", message: `Only ${available}/${desired} replicas are available` });
+  }
+
+  if (unavailable > 0) {
+    problems.push({ severity: "danger", message: `${unavailable} replica(s) unavailable` });
+  }
+
+  for (const condition of deployment.status?.conditions ?? []) {
+    if (condition.status === "False" && (condition.reason || condition.message)) {
+      problems.push({
+        severity: condition.type === "Available" ? "danger" : "warning",
+        message: `${condition.type ?? "Condition"}: ${condition.reason ?? condition.message}`
+      });
+    }
+  }
+
+  return uniqueProblems(problems);
+}
+
+function serviceProblemReasons(service: KubeObjectLike, deployments: KubeObjectLike[], pods: KubeObjectLike[]): ProblemReason[] {
+  const selector = serviceSelector(service);
+  const hasTarget =
+    deployments.some((deployment) => labelsMatch(selector, deploymentTemplateLabels(deployment))) ||
+    pods.some((pod) => labelsMatch(selector, getLabels(pod)));
+
+  if (hasTarget) {
+    return [];
+  }
+
+  return [{ severity: "warning", message: selector ? "No Deployment or Pod matches this Service selector" : "Service has no selector" }];
+}
+
+function ingressProblemReasons(ingress: KubeObjectLike, services: KubeObjectLike[]): ProblemReason[] {
+  const serviceNames = ingressServiceNames(ingress);
+
+  if (serviceNames.length === 0) {
+    return [{ severity: "warning", message: "Ingress has no Service backend" }];
+  }
+
+  const missing = serviceNames.filter((serviceName) =>
+    !services.some((service) => getNamespace(service) === getNamespace(ingress) && getName(service) === serviceName)
+  );
+
+  return missing.length > 0 ? [{ severity: "warning", message: `Missing Service backend: ${missing.join(", ")}` }] : [];
+}
+
+function jobProblemReasons(job: KubeObjectLike): ProblemReason[] {
+  const failed = job.status?.failed ?? 0;
+
+  return failed > 0 ? [{ severity: "danger", message: `${failed} Job pod(s) failed` }] : [];
+}
+
+function cronJobProblemReasons(cronJob: KubeObjectLike, jobs: KubeObjectLike[]): ProblemReason[] {
+  const problems: ProblemReason[] = [];
+  const failedJobs = jobs.filter((job) => (job.status?.failed ?? 0) > 0).length;
+
+  if (cronJob.spec?.suspend) {
+    problems.push({ severity: "warning", message: "CronJob is suspended" });
+  }
+
+  if (failedJobs > 0) {
+    problems.push({ severity: "danger", message: `${failedJobs} recent Job(s) failed` });
+  }
+
+  return problems;
+}
+
+function podGroupProblemReasons(pods: KubeObjectLike[]): ProblemReason[] {
+  return uniqueProblems(pods.flatMap((pod) =>
+    podProblemReasons(pod).map((problem) => ({
+      ...problem,
+      message: `${getName(pod)}: ${problem.message}`
+    }))
+  )).slice(0, 6);
+}
+
+function issueSeverityRank(status: TopologyStatus): number {
+  if (status === "danger") {
+    return 0;
+  }
+
+  if (status === "warning") {
+    return 1;
+  }
+
+  return 2;
+}
+
+function buildTopology(resources: ResourceSet, cronJobWindowHours: number) {
   const { ingresses, services, deployments, cronJobs, jobs, pods, configMaps, secrets } = resources;
   const nodes: TopologyNode[] = [];
   const edges: TopologyEdge[] = [];
@@ -1482,7 +1655,8 @@ function buildTopology(resources: ResourceSet, cronJobWindowHours: number, podMe
       x: columnX.Ingress,
       y: yFor(row, "Ingress"),
       object: ingress,
-      editable: true
+      editable: true,
+      problems: ingressProblemReasons(ingress, services)
     });
   });
 
@@ -1499,7 +1673,8 @@ function buildTopology(resources: ResourceSet, cronJobWindowHours: number, podMe
       x: columnX.Service,
       y: yFor(row, "Service"),
       object: service,
-      editable: true
+      editable: true,
+      problems: serviceProblemReasons(service, deployments, pods)
     });
   });
 
@@ -1517,7 +1692,8 @@ function buildTopology(resources: ResourceSet, cronJobWindowHours: number, podMe
       x: columnX.Deployment,
       y: yFor(index, "Deployment"),
       object: deployment,
-      editable: true
+      editable: true,
+      problems: deploymentProblemReasons(deployment)
     });
   });
 
@@ -1537,7 +1713,11 @@ function buildTopology(resources: ResourceSet, cronJobWindowHours: number, podMe
       x: columnX.CronJobs,
       y: yFor(cronJobRowStart, "CronJobs"),
       object: cronJobsGroupObject(getNamespace(sortedCronJobs[0]), sortedCronJobs, allCronJobJobs),
-      editable: false
+      editable: false,
+      problems: uniqueProblems([
+        ...(suspendedCronJobs > 0 ? [{ severity: "warning" as const, message: `${suspendedCronJobs} CronJob(s) suspended` }] : []),
+        ...(failedJobs > 0 ? [{ severity: "danger" as const, message: `${failedJobs} recent Job(s) failed` }] : [])
+      ])
     });
 
     sortedCronJobs.forEach((cronJob, index) => {
@@ -1557,7 +1737,8 @@ function buildTopology(resources: ResourceSet, cronJobWindowHours: number, podMe
         x: columnX.CronJob,
         y: yFor(row, "CronJob"),
         object: cronJob,
-        editable: true
+        editable: true,
+        problems: cronJobProblemReasons(cronJob, cronJobJobs)
       });
 
       if (cronJobJobs.length > 0) {
@@ -1573,7 +1754,8 @@ function buildTopology(resources: ResourceSet, cronJobWindowHours: number, podMe
           x: columnX.Jobs,
           y: yFor(row, "Jobs"),
           object: jobsGroupObject(getNamespace(cronJob), jobsName, cronJobJobs),
-          editable: false
+          editable: false,
+          problems: uniqueProblems(cronJobJobs.flatMap(jobProblemReasons))
         });
 
         const allJobPods = cronJobJobs.flatMap((job) => podsByJob.get(`${getNamespace(job)}:${getName(job)}`) ?? []);
@@ -1594,6 +1776,7 @@ function buildTopology(resources: ResourceSet, cronJobWindowHours: number, podMe
               y: yFor(row, "Pods"),
               object: podGroupObject(getNamespace(cronJob), `${activePods.length} active pods`, activePods),
               editable: false,
+              problems: podGroupProblemReasons(activePods),
               pods: activePods
             });
           }
@@ -1611,6 +1794,7 @@ function buildTopology(resources: ResourceSet, cronJobWindowHours: number, podMe
               y: yPosition,
               object: podGroupObject(getNamespace(cronJob), `${completedPods.length} completed pods`, completedPods),
               editable: false,
+              problems: podGroupProblemReasons(completedPods),
               pods: completedPods
             });
           }
@@ -1636,6 +1820,7 @@ function buildTopology(resources: ResourceSet, cronJobWindowHours: number, podMe
         y: yFor(row, "Pods"),
         object: podGroupObject(getNamespace(firstPod), name, rowPods),
         editable: false,
+        problems: podGroupProblemReasons(rowPods),
         pods: rowPods
       });
       return;
@@ -1653,6 +1838,7 @@ function buildTopology(resources: ResourceSet, cronJobWindowHours: number, podMe
         y: yFor(row, "Pod"),
         object: pod,
         editable: true,
+        problems: podProblemReasons(pod),
         pods: [pod]
       });
     });
@@ -1937,6 +2123,9 @@ function TopologyCard({
     }
   }
 
+  const primaryProblem = node.problems?.[0];
+  const problemTitle = node.problems?.map((problem) => problem.message).join("\n");
+
   return (
     <button
       type="button"
@@ -1957,6 +2146,11 @@ function TopologyCard({
         {extraInfoNode}
       </div>
       <div className="TopologyCard__status">{node.statusText}</div>
+      {primaryProblem ? (
+        <div className={`TopologyCard__problem is-${primaryProblem.severity}`} title={problemTitle}>
+          {primaryProblem.message}
+        </div>
+      ) : null}
     </button>
   );
 }
@@ -2126,6 +2320,132 @@ function ActionRow({ label, value, onClick }: { label: string; value: string; on
       <strong>{value}</strong>
     </div>
   );
+}
+
+function eventData(event: KubeEventLike): KubeEventLike {
+  return (objectForCopy(event) as KubeEventLike) ?? event;
+}
+
+function eventTimestamp(event: KubeEventLike): string | undefined {
+  const data = eventData(event);
+
+  return data.eventTime ?? data.series?.lastObservedTime ?? data.lastTimestamp ?? data.deprecatedLastTimestamp ?? data.firstTimestamp ?? data.deprecatedFirstTimestamp ?? data.metadata?.creationTimestamp;
+}
+
+function eventTimeValue(event: KubeEventLike): number {
+  const timestamp = eventTimestamp(event);
+
+  return timestamp ? new Date(timestamp).getTime() : 0;
+}
+
+function formatEventTime(event: KubeEventLike): string {
+  const timestamp = eventTimestamp(event);
+
+  if (!timestamp) {
+    return "unknown time";
+  }
+
+  const time = new Date(timestamp);
+
+  if (Number.isNaN(time.getTime())) {
+    return timestamp;
+  }
+
+  return time.toLocaleString();
+}
+
+function eventCount(event: KubeEventLike): number {
+  const data = eventData(event);
+
+  return data.series?.count ?? data.count ?? data.deprecatedCount ?? 1;
+}
+
+function eventSource(event: KubeEventLike): string | undefined {
+  const data = eventData(event);
+
+  return data.reportingController ?? data.reportingComponent ?? data.source?.component ?? data.deprecatedSource?.component ?? data.source?.host ?? data.deprecatedSource?.host;
+}
+
+function eventMatchesNode(event: KubeEventLike, node: TopologyNode): boolean {
+  const data = eventData(event);
+  const involved = data.involvedObject ?? data.regarding;
+
+  if (!involved?.kind || !involved.name) {
+    return false;
+  }
+
+  const namespace = involved.namespace ?? getEventNamespace(data);
+
+  if (namespace !== node.namespace) {
+    return false;
+  }
+
+  if (node.kind === "Pods") {
+    return involved.kind === "Pod" && (node.pods ?? []).some((pod) => getName(pod) === involved.name);
+  }
+
+  return involved.kind === node.kind && involved.name === node.name;
+}
+
+function eventsForNode(events: KubeEventLike[], node: TopologyNode | undefined): KubeEventLike[] {
+  if (!node) {
+    return [];
+  }
+
+  return events
+    .filter((event) => eventMatchesNode(event, node))
+    .sort((left, right) => eventTimeValue(right) - eventTimeValue(left))
+    .slice(0, 20);
+}
+
+function causeHintForReason(reason: string | undefined): string | undefined {
+  switch (reason) {
+    case "BackOff":
+    case "CrashLoopBackOff":
+      return "Container keeps exiting. Check the last log lines, command args, required env vars, and readiness dependencies.";
+    case "Failed":
+      return "Operation failed. Check the event message first, then inspect the owning workload and recent Pod logs.";
+    case "FailedCreate":
+      return "Controller could not create child resources. Check quotas, admission policies, service account permissions, and invalid Pod spec fields.";
+    case "FailedMount":
+    case "UnableToMountVolumes":
+      return "Volume mount failed. Check ConfigMap/Secret/PVC names, storage class, and node volume attach state.";
+    case "FailedScheduling":
+      return "Pod is unschedulable. Check node resources, node selectors, taints/tolerations, affinity, and PVC binding.";
+    case "FailedPull":
+    case "ImagePullBackOff":
+    case "ErrImagePull":
+      return "Image pull failed. Check image name/tag, registry credentials, imagePullSecrets, and registry/network access.";
+    case "Killing":
+      return "Container was stopped by kubelet. Check rollout activity, probes, preStop hooks, and termination grace period.";
+    case "NodeNotReady":
+      return "Node is not ready. Check node conditions before debugging the workload itself.";
+    case "Pulled":
+    case "Created":
+    case "Started":
+    case "Scheduled":
+      return undefined;
+    case "Unhealthy":
+      return "Health probe is failing. Check liveness/readiness/startup probe path, port, timeout, and application startup time.";
+    default:
+      return undefined;
+  }
+}
+
+function causeHintsForEvents(events: KubeEventLike[]): CauseHint[] {
+  const hints = new Map<string, CauseHint>();
+
+  for (const event of events) {
+    const data = eventData(event);
+    const reason = data.reason;
+    const message = causeHintForReason(reason);
+
+    if (reason && message && !hints.has(reason)) {
+      hints.set(reason, { reason, message });
+    }
+  }
+
+  return [...hints.values()].slice(0, 4);
 }
 
 function JsonMeaningRow({ row }: { row: { path: string; value: string; meaning: string } }) {
@@ -2311,9 +2631,76 @@ function DiffWithLines({ changes }: { changes: Array<{ kind: "same" | "removed" 
   );
 }
 
+function IssuePanel({
+  nodes,
+  onSelect
+}: {
+  nodes: TopologyNode[];
+  onSelect: (node: TopologyNode) => void;
+}) {
+  const dangerCount = nodes.filter((node) => node.status === "danger").length;
+  const warningCount = nodes.filter((node) => node.status === "warning").length;
+  const visibleNodes = nodes.slice(0, 8);
+
+  return (
+    <section className="IssuePanel">
+      <div className="IssuePanel__summary">
+        <span>Problems</span>
+        <strong>{dangerCount} Danger / {warningCount} Warning</strong>
+      </div>
+      {visibleNodes.length === 0 ? (
+        <div className="IssuePanel__empty">No warning or danger resources in this namespace.</div>
+      ) : (
+        <div className="IssuePanel__list">
+          {visibleNodes.map((node) => (
+            <button key={node.id} type="button" className={`IssuePanel__item is-${node.status}`} onClick={() => onSelect(node)} title={node.problems?.map((problem) => problem.message).join("\n") ?? node.statusText}>
+              <span>{node.kind}</span>
+              <strong>{node.name}</strong>
+              <em>{node.problems?.[0]?.message ?? node.statusText}</em>
+            </button>
+          ))}
+          {nodes.length > visibleNodes.length ? <div className="IssuePanel__more">+{nodes.length - visibleNodes.length} more</div> : null}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function EventList({ events, limit }: { events: KubeEventLike[]; limit?: number }) {
+  const visibleEvents = limit ? events.slice(0, limit) : events;
+
+  if (events.length === 0) {
+    return <div className="TopologyDetails__eventEmpty">No recent events for this resource.</div>;
+  }
+
+  return (
+    <>
+      {visibleEvents.map((event) => {
+        const data = eventData(event);
+        const type = data.type ?? "Normal";
+        const count = eventCount(event);
+        const source = eventSource(event);
+
+        return (
+          <div key={`${data.involvedObject?.kind ?? data.regarding?.kind}:${data.involvedObject?.name ?? data.regarding?.name}:${data.reason}:${eventTimestamp(data)}`} className={`TopologyDetails__event is-${type.toLowerCase()}`}>
+            <div className="TopologyDetails__eventHeader">
+              <strong>{data.reason ?? type}</strong>
+              <span>{formatEventTime(data)}{count > 1 ? ` · x${count}` : ""}</span>
+            </div>
+            <p>{data.message ?? data.note ?? data.action ?? "No event message."}</p>
+            {source ? <small>{source}</small> : null}
+          </div>
+        );
+      })}
+      {limit && events.length > limit ? <div className="TopologyDetails__eventMore">+{events.length - limit} more events</div> : null}
+    </>
+  );
+}
+
 function TopologyDetails({
   node,
   copied,
+  events,
   onApply,
   onCopy,
   onOpenLogs,
@@ -2321,12 +2708,13 @@ function TopologyDetails({
 }: {
   node: TopologyNode | undefined;
   copied: string | null;
+  events: KubeEventLike[];
   onApply: (node: TopologyNode, yamlText: string) => Promise<void>;
   onCopy: (label: string, value: string) => void;
   onOpenLogs: (node: TopologyNode) => void;
   onClose: () => void;
 }) {
-  const [mode, setMode] = useState<"json" | "yaml">("json");
+  const [mode, setMode] = useState<"inspect" | "json" | "yaml" | "events">("inspect");
   const [yamlText, setYamlText] = useState("");
   const [applyMessage, setApplyMessage] = useState<string | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
@@ -2398,6 +2786,85 @@ function TopologyDetails({
   const yamlChanged = yamlText !== yaml;
   const apiVersion = (jsonObject as any)?.apiVersion;
   const jsonMeanings = jsonMeaningRows(activeNode.kind, jsonObject);
+  const causeHints = causeHintsForEvents(events);
+  const detailRows: React.ReactNode[] = [
+    <DetailRow key="name" label="Name" value={node.name} onCopy={() => onCopy("name", node.name)} />,
+    <DetailRow key="namespace" label="Namespace" value={node.namespace} onCopy={() => onCopy("namespace", node.namespace)} />
+  ];
+
+  if (apiVersion) {
+    detailRows.push(<DetailRow key="apiVersion" label="apiVersion" value={String(apiVersion)} onCopy={() => onCopy("apiVersion", String(apiVersion))} />);
+  }
+
+  if (node.pods?.length) {
+    detailRows.push(
+      <ActionRow
+        key="logs"
+        label="Logs"
+        value={node.pods.length > 1 ? `Open ${node.pods.length} pod logs` : "Open pod logs"}
+        onClick={() => onOpenLogs(node)}
+      />
+    );
+  }
+
+  {
+    const spec = activeNode.object?.spec as any;
+    const status = activeNode.object?.status as any;
+    const metadata = activeNode.object?.metadata as any;
+
+    if (metadata?.creationTimestamp) {
+      const ageInfo = Math.floor((Date.now() - new Date(metadata.creationTimestamp).getTime()) / (1000 * 60 * 60 * 24));
+      detailRows.push(<DetailRow key="age" label="Age" value={`${ageInfo} days`} />);
+    }
+
+    if (metadata?.labels) {
+      const labelsCount = Object.keys(metadata.labels).length;
+      const topLabels = Object.entries(metadata.labels).slice(0, 3).map(([k, v]) => `${k}=${v}`).join(", ");
+      const labelsStr = labelsCount > 3 ? `${topLabels} (+${labelsCount - 3})` : topLabels;
+      detailRows.push(<DetailRow key="labels" label="Labels" value={labelsStr} onCopy={() => onCopy("labels", Object.entries(metadata.labels).map(([k, v]) => `${k}=${v}`).join("\n"))} />);
+    }
+
+    if (activeNode.kind === "Pod") {
+      const nodeName = spec?.nodeName;
+      const podIP = status?.podIP;
+      const images = spec?.containers?.map((container: any) => container.image).join(", ");
+      const restarts = status?.containerStatuses?.reduce((acc: number, containerStatus: any) => acc + (containerStatus.restartCount || 0), 0);
+
+      if (nodeName) detailRows.push(<DetailRow key="node" label="Node" value={nodeName} onCopy={() => onCopy("node", nodeName)} />);
+      if (podIP) detailRows.push(<DetailRow key="ip" label="Pod IP" value={podIP} onCopy={() => onCopy("ip", podIP)} />);
+      if (images) detailRows.push(<DetailRow key="image" label="Image" value={images} onCopy={() => onCopy("image", images)} />);
+      if (restarts > 0) detailRows.push(<DetailRow key="restarts" label="Restarts" value={String(restarts)} />);
+    } else if (activeNode.kind === "Deployment") {
+      const images = spec?.template?.spec?.containers?.map((container: any) => container.image).join(", ");
+      const ready = status?.readyReplicas || 0;
+      const replicas = spec?.replicas || 0;
+
+      if (images) detailRows.push(<DetailRow key="image" label="Image" value={images} onCopy={() => onCopy("image", images)} />);
+      detailRows.push(<DetailRow key="replicas" label="Replicas" value={`${ready} / ${replicas}`} />);
+    } else if (activeNode.kind === "Service") {
+      const type = spec?.type;
+      const clusterIP = spec?.clusterIP;
+      const ports = spec?.ports?.map((port: any) => `${port.port}${port.nodePort ? `:${port.nodePort}` : ""}/${port.protocol || "TCP"}`).join(", ");
+
+      if (type) detailRows.push(<DetailRow key="type" label="Type" value={type} />);
+      if (clusterIP) detailRows.push(<DetailRow key="clusterIP" label="Cluster IP" value={clusterIP} onCopy={() => onCopy("cluster ip", clusterIP)} />);
+      if (ports) detailRows.push(<DetailRow key="ports" label="Ports" value={ports} onCopy={() => onCopy("ports", ports)} />);
+    } else if (activeNode.kind === "Ingress") {
+      const hosts = spec?.rules?.map((rule: any) => rule.host).filter(Boolean).join(", ");
+      const endpoints = status?.loadBalancer?.ingress?.map((ingress: any) => ingress.ip || ingress.hostname).filter(Boolean).join(", ");
+
+      if (hosts) detailRows.push(<DetailRow key="hosts" label="Hosts" value={hosts} onCopy={() => onCopy("hosts", hosts)} />);
+      if (endpoints) detailRows.push(<DetailRow key="endpoints" label="Endpoint IP" value={endpoints} onCopy={() => onCopy("endpoints", endpoints)} />);
+    } else if (activeNode.kind === "CronJob") {
+      if (spec?.schedule) detailRows.push(<DetailRow key="schedule" label="Schedule" value={scheduleWithDescription(spec.schedule, spec.timeZone)} />);
+      if (spec?.suspend !== undefined) detailRows.push(<DetailRow key="suspend" label="Suspend" value={String(spec.suspend)} />);
+    }
+  }
+
+  detailRows.push(
+    <DetailRow key="json" label="JSON" value="Copy full JSON" onCopy={() => onCopy("JSON", json)} />,
+    <DetailRow key="yaml" label="YAML" value="Copy full YAML" onCopy={() => onCopy("YAML", yamlText)} />
+  );
 
   async function applyYaml() {
     setApplying(true);
@@ -2429,88 +2896,51 @@ function TopologyDetails({
       {applyMessage ? <div className="TopologyDetails__applied">{applyMessage}</div> : null}
       {applyError ? <div className="TopologyDetails__applyError">{applyError}</div> : null}
 
-      <div className="TopologyDetails__info">
-        <DetailRow label="Name" value={node.name} onCopy={() => onCopy("name", node.name)} />
-        <DetailRow label="Namespace" value={node.namespace} onCopy={() => onCopy("namespace", node.namespace)} />
-        {apiVersion ? <DetailRow label="apiVersion" value={String(apiVersion)} onCopy={() => onCopy("apiVersion", String(apiVersion))} /> : null}
-        {node.pods?.length ? (
-          <ActionRow
-            label="Logs"
-            value={node.pods.length > 1 ? `Open ${node.pods.length} pod logs` : "Open pod logs"}
-            onClick={() => onOpenLogs(node)}
-          />
-        ) : null}
-
-        {(() => {
-          const spec = activeNode.object?.spec as any;
-          const status = activeNode.object?.status as any;
-          const metadata = activeNode.object?.metadata as any;
-          const rows = [];
-
-          if (metadata?.creationTimestamp) {
-            const ageInfo = Math.floor((Date.now() - new Date(metadata.creationTimestamp).getTime()) / (1000 * 60 * 60 * 24));
-            rows.push(<DetailRow key="age" label="Age" value={`${ageInfo} days`} />);
-          }
-
-          if (metadata?.labels) {
-            const labelsCount = Object.keys(metadata.labels).length;
-            const topLabels = Object.entries(metadata.labels).slice(0, 3).map(([k, v]) => `${k}=${v}`).join(", ");
-            const labelsStr = labelsCount > 3 ? `${topLabels} (+${labelsCount - 3})` : topLabels;
-            rows.push(<DetailRow key="labels" label="Labels" value={labelsStr} onCopy={() => onCopy("labels", Object.entries(metadata.labels).map(([k, v]) => `${k}=${v}`).join("\n"))} />);
-          }
-
-          if (activeNode.kind === "Pod") {
-            const nodeName = spec?.nodeName;
-            const podIP = status?.podIP;
-            const images = spec?.containers?.map((c: any) => c.image).join(", ");
-            const restarts = status?.containerStatuses?.reduce((acc: number, cs: any) => acc + (cs.restartCount || 0), 0);
-
-            if (nodeName) rows.push(<DetailRow key="node" label="Node" value={nodeName} onCopy={() => onCopy("node", nodeName)} />);
-            if (podIP) rows.push(<DetailRow key="ip" label="Pod IP" value={podIP} onCopy={() => onCopy("ip", podIP)} />);
-            if (images) rows.push(<DetailRow key="image" label="Image" value={images} onCopy={() => onCopy("image", images)} />);
-            if (restarts > 0) rows.push(<DetailRow key="restarts" label="Restarts" value={String(restarts)} />);
-            
-          } else if (activeNode.kind === "Deployment") {
-            const images = spec?.template?.spec?.containers?.map((c: any) => c.image).join(", ");
-            const ready = status?.readyReplicas || 0;
-            const replicas = spec?.replicas || 0;
-
-            if (images) rows.push(<DetailRow key="image" label="Image" value={images} onCopy={() => onCopy("image", images)} />);
-            rows.push(<DetailRow key="replicas" label="Replicas" value={`${ready} / ${replicas}`} />);
-            
-          } else if (activeNode.kind === "Service") {
-            const type = spec?.type;
-            const clusterIP = spec?.clusterIP;
-            const ports = spec?.ports?.map((p: any) => `${p.port}${p.nodePort ? `:${p.nodePort}` : ""}/${p.protocol || "TCP"}`).join(", ");
-
-            if (type) rows.push(<DetailRow key="type" label="Type" value={type} />);
-            if (clusterIP) rows.push(<DetailRow key="clusterIP" label="Cluster IP" value={clusterIP} onCopy={() => onCopy("cluster ip", clusterIP)} />);
-            if (ports) rows.push(<DetailRow key="ports" label="Ports" value={ports} onCopy={() => onCopy("ports", ports)} />);
-
-          } else if (activeNode.kind === "Ingress") {
-            const hosts = spec?.rules?.map((r: any) => r.host).filter(Boolean).join(", ");
-            const endpoints = status?.loadBalancer?.ingress?.map((i: any) => i.ip || i.hostname).filter(Boolean).join(", ");
-            
-            if (hosts) rows.push(<DetailRow key="hosts" label="Hosts" value={hosts} onCopy={() => onCopy("hosts", hosts)} />);
-            if (endpoints) rows.push(<DetailRow key="endpoints" label="Endpoint IP" value={endpoints} onCopy={() => onCopy("endpoints", endpoints)} />);
-          } else if (activeNode.kind === "CronJob") {
-            if (spec?.schedule) rows.push(<DetailRow key="schedule" label="Schedule" value={scheduleWithDescription(spec.schedule, spec.timeZone)} />);
-            if (spec?.suspend !== undefined) rows.push(<DetailRow key="suspend" label="Suspend" value={String(spec.suspend)} />);
-          }
-
-          return rows;
-        })()}
-
-        <DetailRow label="JSON" value="Copy full JSON" onCopy={() => onCopy("JSON", json)} />
-        <DetailRow label="YAML" value="Copy full YAML" onCopy={() => onCopy("YAML", yamlText)} />
-      </div>
-
       <div className="TopologyDetails__tabs">
+        <button type="button" className={mode === "inspect" ? "is-active" : ""} onClick={() => setMode("inspect")}>Inspect</button>
         <button type="button" className={mode === "json" ? "is-active" : ""} onClick={() => setMode("json")}>JSON</button>
         <button type="button" className={mode === "yaml" ? "is-active" : ""} onClick={() => setMode("yaml")}>YAML</button>
+        <button type="button" className={mode === "events" ? "is-active" : ""} onClick={() => setMode("events")}>Events</button>
       </div>
 
-      {mode === "json" ? (
+      {mode === "inspect" ? (
+        <div className="TopologyDetails__inspect">
+          {node.problems?.length ? (
+            <section className="TopologyDetails__problems">
+              <div className="TopologyDetails__sectionTitle">Problem Summary</div>
+              {node.problems.map((problem) => (
+                <div key={`${problem.severity}:${problem.message}`} className={`TopologyDetails__problem is-${problem.severity}`}>
+                  {problem.message}
+                </div>
+              ))}
+            </section>
+          ) : null}
+
+          {causeHints.length > 0 ? (
+            <section className="TopologyDetails__causeHints">
+              <div className="TopologyDetails__sectionTitle">Likely Cause</div>
+              {causeHints.map((hint) => (
+                <div key={hint.reason} className="TopologyDetails__causeHint">
+                  <strong>{hint.reason}</strong>
+                  <span>{hint.message}</span>
+                </div>
+              ))}
+            </section>
+          ) : null}
+
+          <div className="TopologyDetails__info">
+            {detailRows}
+          </div>
+
+          <section className="TopologyDetails__events TopologyDetails__events--preview">
+            <div className="TopologyDetails__sectionTitle">
+              Recent Events
+              <span>{events.length}</span>
+            </div>
+            <EventList events={events} limit={3} />
+          </section>
+        </div>
+      ) : mode === "json" ? (
         <div className="TopologyDetails__jsonView">
           <div className="TopologyDetails__summary">
             <button type="button" className="TopologyDetails__summaryButton" onClick={() => setJsonMeaningOpen(true)}>
@@ -2529,8 +2959,8 @@ function TopologyDetails({
           </div>
           {jsonMeaningOpen ? <JsonMeaningModal kind={activeNode.kind} rows={jsonMeanings} onClose={() => setJsonMeaningOpen(false)} /> : null}
         </div>
-      ) : (
-        <>
+      ) : mode === "yaml" ? (
+        <div className="TopologyDetails__yamlView">
           {!activeNode.editable ? <div className="TopologyDetails__applyError">Grouped Pod cards are read-only. Select an individual Pod to edit YAML.</div> : null}
           {warnings.length > 0 ? (
             <div className="TopologyDetails__warnings">
@@ -2552,7 +2982,15 @@ function TopologyDetails({
             <button type="button" onClick={() => setYamlText(yaml)}>Reset YAML</button>
             <button type="button" disabled={applying || !activeNode.editable || !yamlChanged} onClick={() => void applyYaml()}>{applying ? "Applying..." : "Apply YAML"}</button>
           </div>
-        </>
+        </div>
+      ) : (
+        <section className="TopologyDetails__events TopologyDetails__events--full">
+          <div className="TopologyDetails__sectionTitle">
+            Events
+            <span>{events.length}</span>
+          </div>
+          <EventList events={events} />
+        </section>
       )}
     </aside>
   );
@@ -2572,8 +3010,12 @@ function useTopologyStyles() {
   }, []);
 }
 
-async function listOrEmpty(api: { list: () => Promise<unknown> }) {
+async function listOrEmpty(api?: { list: () => Promise<unknown> }) {
   try {
+    if (!api) {
+      return [];
+    }
+
     return await api.list() as KubeObjectLike[];
   } catch {
     return [];
@@ -2980,6 +3422,7 @@ function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: () => vo
   const [excludedMessages, setExcludedMessages] = useState<Set<string>>(new Set());
   const [selectedPods, setSelectedPods] = useState<string[]>([]);
   const [podFilterOpen, setPodFilterOpen] = useState(false);
+  const [hiddenFilterOpen, setHiddenFilterOpen] = useState(false);
   const [selectedContainer, setSelectedContainer] = useState("all");
   const [errorsOnly, setErrorsOnly] = useState(false);
   const [wrapLogs, setWrapLogs] = useState(false);
@@ -3062,6 +3505,7 @@ function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: () => vo
   const matchCount = query.trim() ? filteredLines.length : 0;
   const selectedMatchText = matchCount > 0 ? `${selectedMatchIndex + 1} / ${matchCount}` : query.trim() ? "0 / 0" : `${filteredLines.length} lines`;
   const podFilterLabel = selectedPods.length === 0 ? "All pods" : selectedPods.length === 1 ? selectedPods[0] : `${selectedPods.length} pods`;
+  const hiddenMessages = useMemo(() => [...excludedMessages].sort(), [excludedMessages]);
 
   useEffect(() => {
     setSelectedMatchIndex(0);
@@ -3158,15 +3602,37 @@ function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: () => vo
           >
             Previous
           </button>
-          {excludedMessages.size > 0 && (
-            <button
-              type="button"
-              className="is-danger"
-              onClick={() => setExcludedMessages(new Set())}
-            >
-              Clear hidden ({excludedMessages.size})
-            </button>
-          )}
+          {hiddenMessages.length > 0 ? (
+            <div className="PodLogsModal__hiddenFilter">
+              <span>Hidden</span>
+              <button type="button" className="is-danger" onClick={() => setHiddenFilterOpen((value) => !value)}>
+                {hiddenMessages.length} messages
+              </button>
+              {hiddenFilterOpen ? (
+                <div className="PodLogsModal__hiddenMenu">
+                  <div className="PodLogsModal__hiddenActions">
+                    <button type="button" onClick={() => setExcludedMessages(new Set())}>Clear all</button>
+                  </div>
+                  {hiddenMessages.map((message) => (
+                    <div key={message} className="PodLogsModal__hiddenItem">
+                      <span title={message}>{message}</span>
+                      <button
+                        type="button"
+                        aria-label="Remove hidden message"
+                        onClick={() => setExcludedMessages((current) => {
+                          const next = new Set(current);
+                          next.delete(message);
+                          return next;
+                        })}
+                      >
+                        &times;
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           <div className="PodLogsModal__podFilter">
             <span>Pod</span>
             <button type="button" onClick={() => setPodFilterOpen((value) => !value)}>{podFilterLabel}</button>
@@ -3268,7 +3734,8 @@ function WorkloadTopologyPage() {
     jobs: [],
     pods: [],
     configMaps: [],
-    secrets: []
+    secrets: [],
+    events: []
   });
   const [namespaces, setNamespaces] = useState<string[]>(["default"]);
   const [showIssuesOnly, setShowIssuesOnly] = useState(false);
@@ -3277,7 +3744,6 @@ function WorkloadTopologyPage() {
   const [isLive, setIsLive] = useState(false);
   const [showGrid, setShowGrid] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [podMetrics, setPodMetrics] = useState<Record<string, { cpu: number; memory: number }>>({});
   const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
   const [logModalNode, setLogModalNode] = useState<TopologyNode | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
@@ -3302,7 +3768,7 @@ function WorkloadTopologyPage() {
     }
 
     try {
-      const [namespaceList, ingresses, services, deployments, cronJobs, jobs, pods, configMaps, secrets] = await Promise.all([
+      const [namespaceList, ingresses, services, deployments, cronJobs, jobs, pods, configMaps, secrets, events] = await Promise.all([
         listOrEmpty(K8sApi.namespacesApi),
         listOrEmpty(K8sApi.ingressApi),
         listOrEmpty(K8sApi.serviceApi),
@@ -3311,56 +3777,17 @@ function WorkloadTopologyPage() {
         listOrEmpty(K8sApi.jobApi),
         listOrEmpty(K8sApi.podsApi),
         listOrEmpty(K8sApi.configMapApi),
-        listOrEmpty(K8sApi.secretsApi)
+        listOrEmpty(K8sApi.secretsApi),
+        listOrEmpty((K8sApi as any).eventApi ?? (K8sApi as any).eventsApi)
       ]);
 
-      let metricsRecord: Record<string, { cpu: number; memory: number }> = {};
-      try {
-        const apiBase = K8sApi.podsApi?.apiBase || "/api-kube/api/v1/pods";
-        const clusterProxyPath = apiBase.split('/api/v1')[0];
-        
-        // Try multiple potential metrics paths
-        const metricsPaths = [
-          `${clusterProxyPath}/apis/metrics.k8s.io/v1beta1/pods`,
-          `/api-kube/apis/metrics.k8s.io/v1beta1/pods`,
-          `/api-resource/apis/metrics.k8s.io/v1beta1/pods`,
-          `/apis/metrics.k8s.io/v1beta1/pods`,
-          `${window.location.origin}${clusterProxyPath}/apis/metrics.k8s.io/v1beta1/pods`
-        ];
+      const nextNamespaces = namespaceOptions(
+        { ingresses, services, deployments, cronJobs, jobs, pods, configMaps, secrets, events: events as KubeEventLike[] },
+        namespaceList.map(getName)
+      );
 
-        let res: Response | null = null;
-        for (const path of metricsPaths) {
-          try {
-            const attempt = await fetch(path);
-            if (attempt.ok) {
-              res = attempt;
-              break;
-            }
-          } catch (e) {
-            continue;
-          }
-        }
-        
-        if (res && res.ok) {
-          const data: PodMetricsList = await res.json();
-          data.items.forEach((item) => {
-            let cpu = 0;
-            let memory = 0;
-            item.containers.forEach((container) => {
-              cpu += parseK8sCpu(container.usage.cpu);
-              memory += parseK8sMemory(container.usage.memory);
-            });
-            metricsRecord[`${item.metadata.namespace}:${item.metadata.name}`] = { cpu, memory };
-          });
-        }
-      } catch (err) {
-        // Metrics server might not be available, fail silently
-        console.warn("Failed to fetch pod metrics:", err);
-      }
-
-      setResources({ ingresses, services, deployments, cronJobs, jobs, pods, configMaps, secrets });
-      setNamespaces(namespaceOptions({ ingresses, services, deployments, cronJobs, jobs, pods, configMaps, secrets }, namespaceList.map(getName)));
-      setPodMetrics(metricsRecord);
+      setResources({ ingresses, services, deployments, cronJobs, jobs, pods, configMaps, secrets, events: events as KubeEventLike[] });
+      setNamespaces(nextNamespaces);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Failed to load Kubernetes resources");
     } finally {
@@ -3392,7 +3819,7 @@ function WorkloadTopologyPage() {
   }, [isLive]);
 
   const filteredResources = useMemo(() => filterByNamespace(resources, selectedNamespace), [resources, selectedNamespace]);
-  const baseTopology = useMemo(() => buildTopology(filteredResources, cronJobWindowHours, podMetrics), [filteredResources, cronJobWindowHours, podMetrics]);
+  const baseTopology = useMemo(() => buildTopology(filteredResources, cronJobWindowHours), [filteredResources, cronJobWindowHours]);
   const topology = useMemo(() => ({
     edges: baseTopology.edges,
     cronZoneY: baseTopology.cronZoneY,
@@ -3403,10 +3830,18 @@ function WorkloadTopologyPage() {
   }), [baseTopology, manualPositions]);
   const nodeById = useMemo(() => new Map(topology.nodes.map((node) => [node.id, node])), [topology.nodes]);
   const selectedNode = selectedNodeId ? nodeById.get(selectedNodeId) : undefined;
+  const selectedNodeEvents = useMemo(() => eventsForNode(filteredResources.events, selectedNode), [filteredResources.events, selectedNode]);
   const canvasHeight = Math.max(640, topology.nodes.reduce((height, node) => Math.max(height, node.y + cardHeight + 80), 0));
-  const resourceCount = Object.values(filteredResources).reduce((sum, list) => sum + list.length, 0);
+  const resourceCount = visibleResourceCount(filteredResources);
   const availableNamespaces = useMemo(() => namespaceOptions(resources, namespaces), [resources, namespaces]);
   const connectedIds = useMemo(() => connectedNodeIds(selectedNodeId, topology.edges), [selectedNodeId, topology.edges]);
+  const issueNodes = useMemo(() => topology.nodes
+    .filter((node) => node.status === "danger" || node.status === "warning")
+    .sort((left, right) =>
+      issueSeverityRank(left.status) - issueSeverityRank(right.status) ||
+      left.kind.localeCompare(right.kind) ||
+      left.name.localeCompare(right.name)
+    ), [topology.nodes]);
 
   const issueNodeIds = useMemo(() => {
     if (!showIssuesOnly) return new Set<string>();
@@ -3536,6 +3971,12 @@ function WorkloadTopologyPage() {
       x: canvasSize.width / 2 - x * scale,
       y: canvasSize.height / 2 - y * scale
     });
+  }
+
+  function focusNode(node: TopologyNode) {
+    setSelectedNodeId(node.id);
+    setSelectedNodeIds(new Set([node.id]));
+    navigateToCanvasPoint(node.x + cardWidth / 2, node.y + cardHeight / 2);
   }
 
   function handleCanvasWheel(event: React.WheelEvent<HTMLDivElement>) {
@@ -3677,6 +4118,7 @@ function WorkloadTopologyPage() {
       {error ? <div className="WorkloadTopology__error">{error}</div> : null}
       {loading ? <div className="WorkloadTopology__state">Loading topology...</div> : null}
       {!loading && resourceCount === 0 ? <div className="WorkloadTopology__state">No supported Kubernetes resources found.</div> : null}
+      {!loading && issueNodes.length > 0 ? <IssuePanel nodes={issueNodes} onSelect={focusNode} /> : null}
 
       <div className="WorkloadTopology__body">
         <div
@@ -3909,6 +4351,7 @@ function WorkloadTopologyPage() {
         <TopologyDetails
           node={selectedNode}
           copied={copied}
+          events={selectedNodeEvents}
           onApply={handleApplyYaml}
           onCopy={handleCopy}
           onOpenLogs={setLogModalNode}
