@@ -46,6 +46,52 @@ export const topologyStyles = `
   opacity: 0.35;
 }
 
+.WorkloadTopology__summaryDivider {
+  width: 1px;
+  height: 10px;
+  margin: 0 4px;
+  background: var(--borderColor);
+  flex-shrink: 0;
+}
+
+.WorkloadTopology__statusBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 7px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 17px;
+  border-radius: 9px;
+  white-space: nowrap;
+}
+
+.WorkloadTopology__statusBadge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.WorkloadTopology__statusBadge.is-danger {
+  color: #e85656;
+  background: rgba(212, 72, 72, 0.12);
+}
+
+.WorkloadTopology__statusBadge.is-danger::before {
+  background: #d44848;
+}
+
+.WorkloadTopology__statusBadge.is-warning {
+  color: #d99b20;
+  background: rgba(217, 155, 32, 0.1);
+}
+
+.WorkloadTopology__statusBadge.is-warning::before {
+  background: #d99b20;
+}
+
 .WorkloadTopology__toolbar span {
   color: var(--textColorSecondary);
   font-size: 12px;
@@ -231,107 +277,124 @@ export const topologyStyles = `
 }
 
 .IssuePanel {
+  margin: 10px 18px 0;
+}
+
+.IssuePanel__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.IssuePanel__title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--textColorSecondary);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.IssuePanel__count {
+  font-size: 10px;
+  font-weight: 700;
+  color: #d44848;
+  background: rgba(212, 72, 72, 0.12);
+  padding: 1px 7px;
+  border-radius: 8px;
+  line-height: 16px;
+}
+
+.IssuePanel__toggle {
+  margin-left: auto;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--textColorSecondary);
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+
+.IssuePanel__toggle:hover {
+  opacity: 1;
+  color: #7fb4ff;
+}
+
+.IssuePanel__grid {
   display: grid;
-  grid-template-columns: 150px minmax(0, 1fr);
-  gap: 12px;
-  margin: 12px 18px 0;
-  padding: 10px 12px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 6px;
+  max-height: 198px;
+  overflow-y: auto;
+}
+
+.IssuePanel__card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  text-align: left;
   background: var(--contentColor);
   border: 1px solid var(--borderColor);
   border-radius: 6px;
-}
-
-.IssuePanel__summary {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 4px;
-  min-width: 0;
-}
-
-.IssuePanel__summary span {
-  color: var(--textColorSecondary);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-
-.IssuePanel__summary strong {
-  color: var(--textColorPrimary);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.IssuePanel__list {
-  display: flex;
-  align-items: stretch;
-  gap: 8px;
-  min-width: 0;
-  overflow: auto;
-}
-
-.IssuePanel__item {
-  display: grid;
-  grid-template-rows: auto auto auto;
-  gap: 3px;
-  width: 190px;
-  min-width: 190px;
-  padding: 8px 9px;
-  color: var(--textColorPrimary);
-  text-align: left;
-  background: var(--layoutBackground);
-  border: 1px solid var(--borderColor);
-  border-radius: 4px;
   cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 
-.IssuePanel__item:hover {
-  border-color: #7fb4ff;
+.IssuePanel__card:hover {
+  border-color: rgba(127, 180, 255, 0.4);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
-.IssuePanel__item.is-danger {
-  border-left: 3px solid #d44848;
-}
-
-.IssuePanel__item.is-warning {
-  border-left: 3px solid #d99b20;
-}
-
-.IssuePanel__item span {
-  overflow: hidden;
-  color: var(--textColorSecondary);
-  font-size: 10px;
-  font-weight: 700;
-  text-overflow: ellipsis;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.IssuePanel__item strong {
-  overflow: hidden;
-  font-size: 12px;
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.IssuePanel__item em {
-  overflow: hidden;
-  color: var(--textColorSecondary);
-  font-size: 11px;
-  font-style: normal;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.IssuePanel__empty,
-.IssuePanel__more {
+.IssuePanel__cardTop {
   display: flex;
   align-items: center;
+  gap: 6px;
+}
+
+.IssuePanel__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.IssuePanel__dot.is-danger {
+  background: #d44848;
+  box-shadow: 0 0 6px rgba(212, 72, 72, 0.4);
+}
+
+.IssuePanel__dot.is-warning {
+  background: #d99b20;
+  box-shadow: 0 0 6px rgba(217, 155, 32, 0.3);
+}
+
+.IssuePanel__cardKind {
+  font-size: 10px;
+  font-weight: 700;
   color: var(--textColorSecondary);
+  text-transform: uppercase;
+}
+
+.IssuePanel__cardName {
   font-size: 12px;
+  font-weight: 600;
+  color: var(--textColorPrimary);
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.IssuePanel__cardMsg {
+  font-size: 11px;
+  font-style: normal;
+  color: var(--textColorSecondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.75;
 }
 
 .WorkloadTopology__body {
@@ -705,6 +768,125 @@ export const topologyStyles = `
 .TopologyCard__problem.is-danger {
   color: #d44848;
 }
+
+.TopologyCard__tooltip {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 8px;
+  padding: 8px 10px;
+  min-width: 170px;
+  max-width: 260px;
+  background: rgba(22, 28, 36, 0.95);
+  border: 1px solid rgba(127, 180, 255, 0.15);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  z-index: 10;
+  pointer-events: none;
+  animation: tooltipFadeIn 0.15s ease-out;
+}
+
+@keyframes tooltipFadeIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(4px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+.TopologyCard__tooltip::before {
+  content: "";
+  position: absolute;
+  top: -4px;
+  left: 50%;
+  transform: translateX(-50%) rotate(45deg);
+  width: 7px;
+  height: 7px;
+  background: rgba(22, 28, 36, 0.95);
+  border-top: 1px solid rgba(127, 180, 255, 0.15);
+  border-left: 1px solid rgba(127, 180, 255, 0.15);
+}
+
+.TopologyCard__tooltipRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 2px 0;
+}
+
+.TopologyCard__tooltipRow span {
+  font-size: 10px;
+  color: var(--textColorSecondary);
+  text-transform: none;
+  font-weight: 400;
+  flex-shrink: 0;
+}
+
+.TopologyCard__tooltipRow strong {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--textColorPrimary);
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.StatusToasts {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 1000;
+  pointer-events: none;
+}
+
+.StatusToast {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: rgba(22, 28, 36, 0.92);
+  border: 1px solid var(--borderColor);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  animation: toastSlideIn 0.25s ease-out;
+  white-space: nowrap;
+}
+
+@keyframes toastSlideIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.StatusToast__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.StatusToast__dot.is-healthy { background: #31a66a; box-shadow: 0 0 6px rgba(49, 166, 106, 0.4); }
+.StatusToast__dot.is-danger { background: #d44848; box-shadow: 0 0 6px rgba(212, 72, 72, 0.4); }
+.StatusToast__dot.is-warning { background: #d99b20; box-shadow: 0 0 6px rgba(217, 155, 32, 0.3); }
+.StatusToast__dot.is-unknown { background: #607d8b; }
+
+.StatusToast strong {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--textColorPrimary);
+}
+
+.StatusToast__change {
+  font-size: 11px;
+  color: var(--textColorSecondary);
+}
+
+.StatusToast.is-danger { border-color: rgba(212, 72, 72, 0.3); }
+.StatusToast.is-warning { border-color: rgba(217, 155, 32, 0.2); }
+.StatusToast.is-healthy { border-color: rgba(49, 166, 106, 0.3); }
 
 .TopologyDetails {
   position: relative;

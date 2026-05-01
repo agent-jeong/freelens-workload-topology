@@ -2229,6 +2229,51 @@ function TopologyContextMenu({
   );
 }
 
+function buildTooltipRows(node: TopologyNode): Array<{ label: string; value: string }> {
+  const rows: Array<{ label: string; value: string }> = [];
+  const spec = node.object?.spec as any;
+  const status = node.object?.status as any;
+  const metadata = node.object?.metadata as any;
+
+  if (metadata?.creationTimestamp) {
+    const days = Math.floor((Date.now() - new Date(metadata.creationTimestamp).getTime()) / 86400000);
+    rows.push({ label: "Age", value: `${days}d` });
+  }
+
+  if (node.kind === "Pod") {
+    const podIP = status?.podIP;
+    const nodeName = spec?.nodeName;
+    const image = spec?.containers?.[0]?.image;
+    const restarts = status?.containerStatuses?.reduce((s: number, c: any) => s + (c.restartCount || 0), 0) ?? 0;
+
+    if (podIP) rows.push({ label: "IP", value: podIP });
+    if (nodeName) rows.push({ label: "Node", value: nodeName });
+    if (image) rows.push({ label: "Image", value: image.split("/").pop() ?? image });
+    if (restarts > 0) rows.push({ label: "Restarts", value: String(restarts) });
+  } else if (node.kind === "Deployment") {
+    const ready = status?.readyReplicas ?? 0;
+    const desired = spec?.replicas ?? 0;
+    const image = spec?.template?.spec?.containers?.[0]?.image;
+
+    rows.push({ label: "Replicas", value: `${ready}/${desired}` });
+    if (image) rows.push({ label: "Image", value: image.split("/").pop() ?? image });
+  } else if (node.kind === "Service") {
+    if (spec?.type) rows.push({ label: "Type", value: spec.type });
+    if (spec?.clusterIP) rows.push({ label: "ClusterIP", value: spec.clusterIP });
+    if (spec?.ports?.length) {
+      rows.push({ label: "Ports", value: spec.ports.map((p: any) => `${p.port}/${p.protocol || "TCP"}`).join(", ") });
+    }
+  } else if (node.kind === "Ingress") {
+    const hosts = spec?.rules?.map((r: any) => r.host).filter(Boolean);
+    if (hosts?.length) rows.push({ label: "Hosts", value: hosts.join(", ") });
+  } else if (node.kind === "CronJob") {
+    if (spec?.schedule) rows.push({ label: "Schedule", value: spec.schedule });
+    if (spec?.suspend) rows.push({ label: "Suspend", value: "true" });
+  }
+
+  return rows;
+}
+
 function TopologyCard({
   node,
   selected,
@@ -2244,6 +2289,9 @@ function TopologyCard({
   onSelect: () => void;
   onContextMenu: (event: React.MouseEvent, node: TopologyNode) => void;
 }) {
+  const [hovered, setHovered] = useState(false);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   let extraInfoTitle = node.namespace;
   let extraInfoNode: React.ReactNode = null;
 
@@ -2314,6 +2362,16 @@ function TopologyCard({
 
   const primaryProblem = node.problems?.[0];
   const problemTitle = node.problems?.map((problem) => problem.message).join("\n");
+  const tooltipRows = useMemo(() => buildTooltipRows(node), [node]);
+
+  function handleMouseEnter() {
+    hoverTimer.current = setTimeout(() => setHovered(true), 400);
+  }
+
+  function handleMouseLeave() {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    setHovered(false);
+  }
 
   return (
     <button
@@ -2321,8 +2379,10 @@ function TopologyCard({
       className={`TopologyCard kind-${node.kind} status-${node.status} relation-${relation}${selected ? " is-selected" : ""}`}
       style={{ left: node.x, top: node.y }}
       onClick={onSelect}
-      onMouseDown={(event) => onDragStart(event, node)}
+      onMouseDown={(event) => { handleMouseLeave(); onDragStart(event, node); }}
       onContextMenu={(event) => onContextMenu(event, node)}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
     >
       <div className="TopologyCard__header">
         <span className="TopologyCard__icon">
@@ -2339,6 +2399,16 @@ function TopologyCard({
       {primaryProblem ? (
         <div className={`TopologyCard__problem is-${primaryProblem.severity}`} title={problemTitle}>
           {primaryProblem.message}
+        </div>
+      ) : null}
+      {hovered && tooltipRows.length > 0 && !selected ? (
+        <div className="TopologyCard__tooltip">
+          {tooltipRows.map((row) => (
+            <div key={row.label} className="TopologyCard__tooltipRow">
+              <span>{row.label}</span>
+              <strong>{row.value}</strong>
+            </div>
+          ))}
         </div>
       ) : null}
     </button>
@@ -2840,30 +2910,39 @@ function IssuePanel({
   nodes: TopologyNode[];
   onSelect: (node: TopologyNode) => void;
 }) {
-  const dangerCount = nodes.filter((node) => node.status === "danger").length;
-  const warningCount = nodes.filter((node) => node.status === "warning").length;
-  const visibleNodes = nodes.slice(0, 8);
+  const [expanded, setExpanded] = useState(false);
+  const visibleNodes = expanded ? nodes : nodes.slice(0, 6);
+  const hasMore = nodes.length > 6;
 
   return (
     <section className="IssuePanel">
-      <div className="IssuePanel__summary">
-        <span>Problems</span>
-        <strong>{dangerCount} Danger / {warningCount} Warning</strong>
+      <div className="IssuePanel__header">
+        <span className="IssuePanel__title">Problems</span>
+        <span className="IssuePanel__count">{nodes.length}</span>
+        {hasMore && (
+          <button type="button" className="IssuePanel__toggle" onClick={() => setExpanded((v) => !v)}>
+            {expanded ? "Collapse" : `+${nodes.length - 6} more`}
+          </button>
+        )}
       </div>
-      {visibleNodes.length === 0 ? (
-        <div className="IssuePanel__empty">No warning or danger resources in this namespace.</div>
-      ) : (
-        <div className="IssuePanel__list">
-          {visibleNodes.map((node) => (
-            <button key={node.id} type="button" className={`IssuePanel__item is-${node.status}`} onClick={() => onSelect(node)} title={node.problems?.map((problem) => problem.message).join("\n") ?? node.statusText}>
-              <span>{node.kind}</span>
-              <strong>{node.name}</strong>
-              <em>{node.problems?.[0]?.message ?? node.statusText}</em>
-            </button>
-          ))}
-          {nodes.length > visibleNodes.length ? <div className="IssuePanel__more">+{nodes.length - visibleNodes.length} more</div> : null}
-        </div>
-      )}
+      <div className="IssuePanel__grid">
+        {visibleNodes.map((node) => (
+          <button
+            key={node.id}
+            type="button"
+            className={`IssuePanel__card is-${node.status}`}
+            onClick={() => onSelect(node)}
+            title={node.problems?.map((p) => p.message).join("\n") ?? node.statusText}
+          >
+            <div className="IssuePanel__cardTop">
+              <span className={`IssuePanel__dot is-${node.status}`} />
+              <span className="IssuePanel__cardKind">{node.kind}</span>
+            </div>
+            <strong className="IssuePanel__cardName">{node.name}</strong>
+            <em className="IssuePanel__cardMsg">{node.problems?.[0]?.message ?? node.statusText}</em>
+          </button>
+        ))}
+      </div>
     </section>
   );
 }
@@ -3980,6 +4059,9 @@ function WorkloadTopologyPage() {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const suppressLayoutSave = useRef(false);
   const liveRefreshInFlight = useRef(false);
+  const prevNodeStatuses = useRef<Map<string, TopologyStatus>>(new Map());
+  const [statusToasts, setStatusToasts] = useState<Array<{ id: number; name: string; kind: string; from: TopologyStatus; to: TopologyStatus }>>([]);
+  const toastCounter = useRef(0);
   const [canvasSize, setCanvasSize] = useState<ViewportSize>({ width: 1, height: 1 });
 
   async function loadResources(options: { silent?: boolean } = {}) {
@@ -4078,6 +4160,40 @@ function WorkloadTopologyPage() {
       left.kind.localeCompare(right.kind) ||
       left.name.localeCompare(right.name)
     ), [topology.nodes]);
+
+  useEffect(() => {
+    const prev = prevNodeStatuses.current;
+
+    if (isLive && prev.size > 0) {
+      const newToasts: typeof statusToasts = [];
+
+      for (const node of topology.nodes) {
+        const oldStatus = prev.get(node.id);
+
+        if (oldStatus && oldStatus !== node.status) {
+          toastCounter.current += 1;
+          newToasts.push({ id: toastCounter.current, name: node.name, kind: node.kind, from: oldStatus, to: node.status });
+        }
+      }
+
+      if (newToasts.length > 0) {
+        setStatusToasts((current) => [...current, ...newToasts].slice(-5));
+        const ids = newToasts.map((t) => t.id);
+
+        setTimeout(() => {
+          setStatusToasts((current) => current.filter((t) => !ids.includes(t.id)));
+        }, 5000);
+      }
+    }
+
+    const next = new Map<string, TopologyStatus>();
+
+    for (const node of topology.nodes) {
+      next.set(node.id, node.status);
+    }
+
+    prevNodeStatuses.current = next;
+  }, [topology.nodes, isLive]);
 
   const issueNodeIds = useMemo(() => {
     if (!showIssuesOnly) return new Set<string>();
@@ -4333,6 +4449,21 @@ function WorkloadTopologyPage() {
                 <strong>{count}</strong> {label}
               </span>
             ))}
+            {issueNodes.length > 0 ? (
+              <>
+                <span className="WorkloadTopology__summaryDivider" />
+                {issueNodes.filter((n) => n.status === "danger").length > 0 && (
+                  <span className="WorkloadTopology__statusBadge is-danger">
+                    {issueNodes.filter((n) => n.status === "danger").length} danger
+                  </span>
+                )}
+                {issueNodes.filter((n) => n.status === "warning").length > 0 && (
+                  <span className="WorkloadTopology__statusBadge is-warning">
+                    {issueNodes.filter((n) => n.status === "warning").length} warning
+                  </span>
+                )}
+              </>
+            ) : null}
           </div>
         </div>
         <div className="WorkloadTopology__actions">
@@ -4686,6 +4817,17 @@ function WorkloadTopologyPage() {
           items={buildContextMenuItems(contextMenu.node)}
           onClose={() => setContextMenu(null)}
         />
+      ) : null}
+      {statusToasts.length > 0 ? (
+        <div className="StatusToasts">
+          {statusToasts.map((toast) => (
+            <div key={toast.id} className={`StatusToast is-${toast.to}`}>
+              <span className={`StatusToast__dot is-${toast.to}`} />
+              <strong>{toast.kind}/{toast.name}</strong>
+              <span className="StatusToast__change">{toast.from} → {toast.to}</span>
+            </div>
+          ))}
+        </div>
       ) : null}
     </div>
   );
