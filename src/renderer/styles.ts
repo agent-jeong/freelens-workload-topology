@@ -18,9 +18,32 @@ export const topologyStyles = `
 }
 
 .WorkloadTopology__toolbar h2 {
-  margin: 0 0 4px;
+  margin: 0 0 5px;
   font-size: 18px;
   font-weight: 600;
+}
+
+.WorkloadTopology__summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 4px;
+}
+
+.WorkloadTopology__summaryItem {
+  font-size: 11px;
+  color: var(--textColorSecondary);
+}
+
+.WorkloadTopology__summaryItem strong {
+  font-weight: 700;
+  color: var(--textColorPrimary);
+  margin-right: 1px;
+}
+
+.WorkloadTopology__summaryItem:not(:last-child)::after {
+  content: "\\00b7";
+  margin-left: 4px;
+  opacity: 0.35;
 }
 
 .WorkloadTopology__toolbar span {
@@ -33,6 +56,133 @@ export const topologyStyles = `
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+}
+
+.WorkloadTopology__search {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.WorkloadTopology__search input {
+  width: 36px;
+  height: 30px;
+  padding: 0 10px 0 30px;
+  color: var(--textColorPrimary);
+  background: rgba(127, 180, 255, 0.06);
+  border: 1px solid transparent;
+  border-radius: 15px;
+  font-size: 12px;
+  outline: none;
+  cursor: pointer;
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+              background 0.2s,
+              border-color 0.2s,
+              box-shadow 0.2s,
+              padding 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.WorkloadTopology__search input:focus {
+  width: 220px;
+  padding: 0 30px 0 30px;
+  background: var(--contentColor);
+  border-color: rgba(75, 123, 236, 0.5);
+  box-shadow: 0 0 0 3px rgba(75, 123, 236, 0.12), 0 2px 8px rgba(0, 0, 0, 0.15);
+  cursor: text;
+}
+
+.WorkloadTopology__search input.has-value {
+  width: 220px;
+  padding: 0 30px 0 30px;
+  background: var(--contentColor);
+  border-color: rgba(75, 123, 236, 0.35);
+  cursor: text;
+}
+
+.WorkloadTopology__search::before {
+  content: "";
+  position: absolute;
+  left: 10px;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--textColorSecondary);
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.5;
+  transition: opacity 0.2s;
+}
+
+.WorkloadTopology__search::after {
+  content: "";
+  position: absolute;
+  left: 22px;
+  top: 50%;
+  width: 1.5px;
+  height: 5px;
+  background: var(--textColorSecondary);
+  transform: translateY(2px) rotate(-45deg);
+  transform-origin: top;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.5;
+  transition: opacity 0.2s;
+}
+
+.WorkloadTopology__search:focus-within::before,
+.WorkloadTopology__search:focus-within::after {
+  opacity: 0.9;
+  border-color: #7fb4ff;
+  background: #7fb4ff;
+}
+
+.WorkloadTopology__search:focus-within::before {
+  background: none;
+}
+
+.WorkloadTopology__search input::placeholder {
+  color: var(--textColorSecondary);
+  opacity: 0;
+  transition: opacity 0.2s 0.1s;
+}
+
+.WorkloadTopology__search input:focus::placeholder {
+  opacity: 0.5;
+}
+
+.WorkloadTopology__search button {
+  position: absolute;
+  right: 7px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--textColorSecondary);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.5;
+  transition: opacity 0.15s;
+}
+
+.WorkloadTopology__search button:hover {
+  opacity: 1;
+}
+
+.WorkloadTopology__searchCount {
+  flex-shrink: 0;
+  margin-left: 8px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #7fb4ff;
+  background: rgba(127, 180, 255, 0.1);
+  border-radius: 10px;
+  white-space: nowrap;
 }
 
 .WorkloadTopology__namespace {

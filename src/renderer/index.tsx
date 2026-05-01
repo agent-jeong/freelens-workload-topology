@@ -211,7 +211,7 @@ function nodeId(kind: TopologyKind, object: KubeObjectLike): string {
 }
 
 function objectForCopy(object: KubeObjectLike): unknown {
-  return object.toJSON?.() ?? object;
+  return JSON.parse(JSON.stringify(object));
 }
 
 function stringifyObject(object: KubeObjectLike): string {
@@ -709,6 +709,123 @@ function editableObject(object: KubeObjectLike): any {
 
 function stringifyYaml(object: KubeObjectLike): string {
   return YAML.stringify(editableObject(object));
+}
+
+function isSensitiveKey(key: string): boolean {
+  return /token|secret|password|passwd|credential|apikey|api-key|authorization|auth|cert|key$/i.test(key);
+}
+
+function sanitizeForAi(value: unknown, path: string[] = []): unknown {
+  const currentKey = path[path.length - 1] ?? "";
+  const pathKey = path.join(".");
+
+  if (pathKey === "metadata.managedFields") {
+    return "[omitted]";
+  }
+
+  if (pathKey === "metadata.annotations") {
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? Object.fromEntries(Object.keys(value as Record<string, unknown>).map((key) => [key, "[redacted]"]))
+      : "[redacted]";
+  }
+
+  if (pathKey === "data" || pathKey === "binaryData" || pathKey === "stringData") {
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? Object.fromEntries(Object.keys(value as Record<string, unknown>).map((key) => [key, "[redacted]"]))
+      : "[redacted]";
+  }
+
+  if ((currentKey === "value" && path.includes("env")) || isSensitiveKey(currentKey)) {
+    return "[redacted]";
+  }
+
+  if (Array.isArray(value)) {
+    return value.slice(0, 30).map((item, index) => sanitizeForAi(item, [...path, String(index)]));
+  }
+
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([key]) => key !== "managedFields")
+        .map(([key, item]) => [key, sanitizeForAi(item, [...path, key])])
+    );
+  }
+
+  return value;
+}
+
+function compactYaml(value: unknown, maxLength = 5000): string {
+  const text = YAML.stringify(value).trim();
+
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return `${text.slice(0, maxLength)}\n... [truncated]`;
+}
+
+function aiEventSummary(events: KubeEventLike[]): Array<Record<string, unknown>> {
+  return events.slice(0, 8).map((event) => {
+    const data = eventData(event);
+
+    return {
+      type: data.type ?? "Normal",
+      reason: data.reason,
+      message: data.message ?? data.note ?? data.action,
+      count: eventCount(data),
+      source: eventSource(data),
+      lastSeen: eventTimestamp(data)
+    };
+  });
+}
+
+function aiRelatedSummary(node: TopologyNode): unknown {
+  if (node.kind !== "Pods" || !node.pods?.length) {
+    return undefined;
+  }
+
+  return node.pods.slice(0, 20).map((pod) => ({
+    name: getName(pod),
+    phase: pod.status?.phase ?? pod.getStatus?.(),
+    restarts: pod.status?.containerStatuses?.reduce((total: number, container: any) => total + (container.restartCount ?? 0), 0) ?? 0,
+    waiting: pod.status?.containerStatuses?.map((container: any) => container.state?.waiting?.reason).filter(Boolean)
+  }));
+}
+
+function buildAiAnalysisPrompt(node: TopologyNode, events: KubeEventLike[], causeHints: CauseHint[]): string {
+  const sanitizedObject = sanitizeForAi(objectForCopy(node.object));
+  const related = aiRelatedSummary(node);
+  const context = {
+    resource: {
+      kind: node.kind,
+      name: node.name,
+      namespace: node.namespace,
+      status: node.status,
+      statusText: node.statusText
+    },
+    problemSummary: node.problems ?? [],
+    ruleBasedCauseHints: causeHints,
+    recentEvents: aiEventSummary(events),
+    related,
+    sanitizedObject
+  };
+
+  return [
+    "You are assisting with Kubernetes workload troubleshooting.",
+    "Analyze the sanitized resource context below. Do not assume hidden data. Treat Secret values, env values, tokens, and credentials as unavailable because they are intentionally redacted.",
+    "",
+    "Return the answer in Korean with this structure:",
+    "1. 핵심 요약",
+    "2. 가능성 높은 원인",
+    "3. 근거가 되는 이벤트/상태",
+    "4. 바로 확인할 항목",
+    "5. 수정 전 주의사항",
+    "",
+    "Sanitized context:",
+    "```yaml",
+    compactYaml(context),
+    "```"
+  ].join("\n");
 }
 
 function apiForKind(kind: TopologyKind): KubeApiLike {
@@ -2315,7 +2432,19 @@ function DetailRow({ label, value, onCopy }: { label: string; value: string; onC
 
 function ActionRow({ label, value, onClick }: { label: string; value: string; onClick: () => void }) {
   return (
-    <div className="TopologyDetails__row TopologyDetails__row--action" onClick={onClick} title={value}>
+    <div
+      className="TopologyDetails__row TopologyDetails__row--action"
+      onClick={onClick}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onClick();
+        }
+      }}
+      role="button"
+      tabIndex={0}
+      title={value}
+    >
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
@@ -2710,7 +2839,7 @@ function TopologyDetails({
   copied: string | null;
   events: KubeEventLike[];
   onApply: (node: TopologyNode, yamlText: string) => Promise<void>;
-  onCopy: (label: string, value: string) => void;
+  onCopy: (label: string, value: string) => void | Promise<void>;
   onOpenLogs: (node: TopologyNode) => void;
   onClose: () => void;
 }) {
@@ -2866,6 +2995,15 @@ function TopologyDetails({
     <DetailRow key="yaml" label="YAML" value="Copy full YAML" onCopy={() => onCopy("YAML", yamlText)} />
   );
 
+  detailRows.push(
+    <ActionRow
+      key="ai-prompt"
+      label="AI Assist"
+      value="Copy analysis prompt"
+      onClick={() => void copyAiAnalysisPrompt()}
+    />
+  );
+
   async function applyYaml() {
     setApplying(true);
     setApplyMessage(null);
@@ -2878,6 +3016,17 @@ function TopologyDetails({
       setApplyError(error instanceof Error ? error.message : "Failed to apply YAML");
     } finally {
       setApplying(false);
+    }
+  }
+
+  async function copyAiAnalysisPrompt() {
+    setApplyMessage(null);
+    setApplyError(null);
+
+    try {
+      await onCopy("AI analysis prompt", buildAiAnalysisPrompt(activeNode, events, causeHints));
+    } catch (error) {
+      setApplyError(error instanceof Error ? error.message : "Failed to copy AI analysis prompt.");
     }
   }
 
@@ -3024,8 +3173,13 @@ async function listOrEmpty(api?: { list: () => Promise<unknown> }) {
 
 async function copyText(value: string) {
   if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(value);
-    return;
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Freelens extension views can reject the async Clipboard API depending on
+      // the runtime context. Fall back to the legacy selection-based copy path.
+    }
   }
 
   const textarea = document.createElement("textarea");
@@ -3036,8 +3190,13 @@ async function copyText(value: string) {
   document.body.appendChild(textarea);
   textarea.focus();
   textarea.select();
-  document.execCommand("copy");
+  const copied = document.execCommand("copy");
+
   document.body.removeChild(textarea);
+
+  if (!copied) {
+    throw new Error("Clipboard copy failed. Try copying from the JSON or YAML tab manually.");
+  }
 }
 
 function podContainers(pod: KubeObjectLike): string[] {
@@ -3739,6 +3898,7 @@ function WorkloadTopologyPage() {
   });
   const [namespaces, setNamespaces] = useState<string[]>(["default"]);
   const [showIssuesOnly, setShowIssuesOnly] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const [selectedNamespace, setSelectedNamespace] = useState("default");
   const [cronJobWindowHours, setCronJobWindowHours] = useState(24);
   const [isLive, setIsLive] = useState(false);
@@ -3835,6 +3995,21 @@ function WorkloadTopologyPage() {
   const resourceCount = visibleResourceCount(filteredResources);
   const availableNamespaces = useMemo(() => namespaceOptions(resources, namespaces), [resources, namespaces]);
   const connectedIds = useMemo(() => connectedNodeIds(selectedNodeId, topology.edges), [selectedNodeId, topology.edges]);
+  const searchMatchIds = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+
+    if (!q) return null;
+
+    const matched = new Set<string>();
+
+    for (const node of topology.nodes) {
+      if (node.name.toLowerCase().includes(q) || node.kind.toLowerCase().includes(q)) {
+        matched.add(node.id);
+      }
+    }
+
+    return matched;
+  }, [searchQuery, topology.nodes]);
   const issueNodes = useMemo(() => topology.nodes
     .filter((node) => node.status === "danger" || node.status === "warning")
     .sort((left, right) =>
@@ -3876,9 +4051,23 @@ function WorkloadTopologyPage() {
     }
   }, [nodeById, selectedNodeId]);
 
+  const searchInputRef = React.useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "k") {
+        event.preventDefault();
+        searchInputRef.current?.focus();
+        return;
+      }
+
       if (event.key === "Escape") {
+        if (searchQuery) {
+          setSearchQuery("");
+          searchInputRef.current?.blur();
+          return;
+        }
+
         if (logModalNode) {
           setLogModalNode(null);
           return;
@@ -3892,7 +4081,7 @@ function WorkloadTopologyPage() {
     window.addEventListener("keydown", handleKeyDown);
 
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [logModalNode]);
+  }, [logModalNode, searchQuery]);
 
   useEffect(() => {
     setManualPositions((current) => {
@@ -4039,11 +4228,46 @@ function WorkloadTopologyPage() {
       <div className="WorkloadTopology__toolbar">
         <div>
           <h2>Workload Topology</h2>
-          <span>
-            {resources.ingresses.length} Ingress / {resources.services.length} Service / {resources.deployments.length} Deployment / {resources.cronJobs.length} CronJob / {resources.jobs.length} Job / {resources.pods.length} Pod / {resources.configMaps.length} ConfigMap / {resources.secrets.length} Secret
-          </span>
+          <div className="WorkloadTopology__summary">
+            {[
+              { label: "Ingress", count: resources.ingresses.length },
+              { label: "Service", count: resources.services.length },
+              { label: "Deployment", count: resources.deployments.length },
+              { label: "CronJob", count: resources.cronJobs.length },
+              { label: "Job", count: resources.jobs.length },
+              { label: "Pod", count: resources.pods.length },
+              { label: "ConfigMap", count: resources.configMaps.length },
+              { label: "Secret", count: resources.secrets.length },
+            ].map(({ label, count }) => (
+              <span key={label} className="WorkloadTopology__summaryItem">
+                <strong>{count}</strong> {label}
+              </span>
+            ))}
+          </div>
         </div>
         <div className="WorkloadTopology__actions">
+          <div className="WorkloadTopology__search">
+            <input
+              ref={searchInputRef}
+              type="text"
+              className={searchQuery ? "has-value" : ""}
+              placeholder="Search resources… (⌘K)"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  setSearchQuery("");
+                  (event.target as HTMLInputElement).blur();
+                }
+              }}
+            />
+            {searchQuery && (
+              <button type="button" onClick={() => { setSearchQuery(""); searchInputRef.current?.focus(); }} aria-label="Clear search">&times;</button>
+            )}
+          </div>
+          {searchMatchIds !== null && (
+            <span className="WorkloadTopology__searchCount">{searchMatchIds.size} found</span>
+          )}
           <label className="WorkloadTopology__namespace">
             <span>Namespace</span>
             <select
@@ -4254,7 +4478,7 @@ function WorkloadTopologyPage() {
                 return (
                   <path
                     key={edge.id}
-                    className={selectedNodeId ? connectedIds.has(edge.from) && connectedIds.has(edge.to) ? "relation-connected" : "relation-dimmed" : undefined}
+                    className={searchMatchIds ? searchMatchIds.has(edge.from) && searchMatchIds.has(edge.to) ? "relation-connected" : "relation-dimmed" : selectedNodeId ? connectedIds.has(edge.from) && connectedIds.has(edge.to) ? "relation-connected" : "relation-dimmed" : undefined}
                     d={`M ${from.x + cardWidth} ${from.y + cardHeight / 2} C ${from.x + cardWidth + 42} ${from.y + cardHeight / 2}, ${to.x - 42} ${to.y + cardHeight / 2}, ${to.x} ${to.y + cardHeight / 2}`}
                   />
                 );
@@ -4291,7 +4515,7 @@ function WorkloadTopologyPage() {
                 node={node}
                 selected={selectedNodeId === node.id || selectedNodeIds.has(node.id)}
                 onDragStart={handleNodeDragStart}
-                relation={selectedNodeId ? connectedIds.has(node.id) ? "connected" : "dimmed" : "normal"}
+                relation={searchMatchIds ? searchMatchIds.has(node.id) ? "connected" : "dimmed" : selectedNodeId ? connectedIds.has(node.id) ? "connected" : "dimmed" : "normal"}
                 onSelect={() => {
                   const wasAlreadySelected = nodeDragStart.current?.wasAlreadySelected;
                   const didDrag = nodeDragStart.current?.didDrag;
@@ -4348,15 +4572,17 @@ function WorkloadTopologyPage() {
             onNavigate={navigateToCanvasPoint}
           />
         </div>
-        <TopologyDetails
-          node={selectedNode}
-          copied={copied}
-          events={selectedNodeEvents}
-          onApply={handleApplyYaml}
-          onCopy={handleCopy}
-          onOpenLogs={setLogModalNode}
-          onClose={() => setSelectedNodeId(null)}
-        />
+        {selectedNode ? (
+          <TopologyDetails
+            node={selectedNode}
+            copied={copied}
+            events={selectedNodeEvents}
+            onApply={handleApplyYaml}
+            onCopy={handleCopy}
+            onOpenLogs={setLogModalNode}
+            onClose={() => setSelectedNodeId(null)}
+          />
+        ) : null}
       </div>
       {logModalNode ? <PodLogsModal node={logModalNode} onClose={() => setLogModalNode(null)} /> : null}
     </div>
