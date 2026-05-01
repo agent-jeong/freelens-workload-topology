@@ -2086,4 +2086,49 @@ export const topologyStyles = `
 .PodLogsModal__line.source-5 .PodLogsModal__source { color: #e06c75; }
 .PodLogsModal__line.source-6 .PodLogsModal__source { color: #98c379; }
 .PodLogsModal__line.source-7 .PodLogsModal__source { color: #abb2bf; }
+
+.TopologyContextMenu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 180px;
+  padding: 4px 0;
+  background: var(--mainBackground, #1e2228);
+  border: 1px solid var(--borderColor);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.TopologyContextMenu__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 14px;
+  border: none;
+  background: none;
+  color: var(--textColorPrimary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s;
+}
+
+.TopologyContextMenu__item:hover {
+  background: rgba(127, 180, 255, 0.1);
+}
+
+.TopologyContextMenu__icon {
+  width: 16px;
+  text-align: center;
+  font-size: 13px;
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.TopologyContextMenu__separator {
+  height: 1px;
+  margin: 4px 10px;
+  background: var(--borderColor);
+}
 `;

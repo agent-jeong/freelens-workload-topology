@@ -2159,18 +2159,90 @@ function ResourceIcon({ kind }: { kind: string }) {
   }
 }
 
+interface ContextMenuItem {
+  label: string;
+  icon: string;
+  onClick: () => void;
+  separator?: boolean;
+}
+
+function TopologyContextMenu({
+  x,
+  y,
+  items,
+  onClose
+}: {
+  x: number;
+  y: number;
+  items: ContextMenuItem[];
+  onClose: () => void;
+}) {
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = menuRef.current;
+
+    if (!el) return;
+
+    const rect = el.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    if (rect.right > vw) el.style.left = `${x - rect.width}px`;
+    if (rect.bottom > vh) el.style.top = `${y - rect.height}px`;
+  }, [x, y]);
+
+  useEffect(() => {
+    const handleClose = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) onClose();
+    };
+
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+
+    window.addEventListener("mousedown", handleClose);
+    window.addEventListener("keydown", handleKey);
+
+    return () => {
+      window.removeEventListener("mousedown", handleClose);
+      window.removeEventListener("keydown", handleKey);
+    };
+  }, [onClose]);
+
+  return (
+    <div ref={menuRef} className="TopologyContextMenu" style={{ left: x, top: y }}>
+      {items.map((item, i) => (
+        <React.Fragment key={item.label}>
+          {item.separator && i > 0 ? <div className="TopologyContextMenu__separator" /> : null}
+          <button
+            type="button"
+            className="TopologyContextMenu__item"
+            onClick={() => { item.onClick(); onClose(); }}
+          >
+            <span className="TopologyContextMenu__icon">{item.icon}</span>
+            {item.label}
+          </button>
+        </React.Fragment>
+      ))}
+    </div>
+  );
+}
+
 function TopologyCard({
   node,
   selected,
   onDragStart,
   relation,
-  onSelect
+  onSelect,
+  onContextMenu
 }: {
   node: TopologyNode;
   selected: boolean;
   onDragStart: (event: React.MouseEvent, node: TopologyNode) => void;
   relation: "normal" | "connected" | "dimmed";
   onSelect: () => void;
+  onContextMenu: (event: React.MouseEvent, node: TopologyNode) => void;
 }) {
   let extraInfoTitle = node.namespace;
   let extraInfoNode: React.ReactNode = null;
@@ -2250,6 +2322,7 @@ function TopologyCard({
       style={{ left: node.x, top: node.y }}
       onClick={onSelect}
       onMouseDown={(event) => onDragStart(event, node)}
+      onContextMenu={(event) => onContextMenu(event, node)}
     >
       <div className="TopologyCard__header">
         <span className="TopologyCard__icon">
@@ -2990,19 +3063,6 @@ function TopologyDetails({
     }
   }
 
-  detailRows.push(
-    <DetailRow key="json" label="JSON" value="Copy full JSON" onCopy={() => onCopy("JSON", json)} />,
-    <DetailRow key="yaml" label="YAML" value="Copy full YAML" onCopy={() => onCopy("YAML", yamlText)} />
-  );
-
-  detailRows.push(
-    <ActionRow
-      key="ai-prompt"
-      label="AI Assist"
-      value="Copy analysis prompt"
-      onClick={() => void copyAiAnalysisPrompt()}
-    />
-  );
 
   async function applyYaml() {
     setApplying(true);
@@ -3899,6 +3959,7 @@ function WorkloadTopologyPage() {
   const [namespaces, setNamespaces] = useState<string[]>(["default"]);
   const [showIssuesOnly, setShowIssuesOnly] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: TopologyNode } | null>(null);
   const [selectedNamespace, setSelectedNamespace] = useState("default");
   const [cronJobWindowHours, setCronJobWindowHours] = useState(24);
   const [isLive, setIsLive] = useState(false);
@@ -4129,6 +4190,35 @@ function WorkloadTopologyPage() {
     await copyText(value);
     setCopied(label);
     window.setTimeout(() => setCopied(null), 1600);
+  }
+
+  function buildContextMenuItems(node: TopologyNode): ContextMenuItem[] {
+    const items: ContextMenuItem[] = [
+      { label: "Copy name", icon: "\u2398", onClick: () => void handleCopy("name", node.name) },
+      { label: "Copy JSON", icon: "\u007B\u007D", onClick: () => void handleCopy("JSON", JSON.stringify(objectForCopy(node.object), null, 2)) },
+      { label: "Copy YAML", icon: "\u2B1A", onClick: () => void handleCopy("YAML", YAML.stringify(objectForCopy(node.object))) },
+    ];
+
+    if (node.pods?.length) {
+      items.push({
+        label: node.pods.length > 1 ? `Open ${node.pods.length} pod logs` : "Open pod logs",
+        icon: "\u25B6",
+        onClick: () => setLogModalNode(node),
+        separator: true,
+      });
+    }
+
+    const nodeEvents = eventsForNode(filteredResources.events, node);
+    const hints = causeHintsForEvents(nodeEvents);
+
+    items.push({
+      label: "Copy AI prompt",
+      icon: "\u2728",
+      onClick: () => void handleCopy("AI analysis prompt", buildAiAnalysisPrompt(node, nodeEvents, hints)),
+      separator: true,
+    });
+
+    return items;
   }
 
   async function handleApplyYaml(node: TopologyNode, yamlText: string) {
@@ -4528,6 +4618,10 @@ function WorkloadTopologyPage() {
                     setSelectedNodeIds(new Set([node.id]));
                   }
                 }}
+                onContextMenu={(event, n) => {
+                  event.preventDefault();
+                  setContextMenu({ x: event.clientX, y: event.clientY, node: n });
+                }}
               />
               );
             })}
@@ -4585,6 +4679,14 @@ function WorkloadTopologyPage() {
         ) : null}
       </div>
       {logModalNode ? <PodLogsModal node={logModalNode} onClose={() => setLogModalNode(null)} /> : null}
+      {contextMenu ? (
+        <TopologyContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={buildContextMenuItems(contextMenu.node)}
+          onClose={() => setContextMenu(null)}
+        />
+      ) : null}
     </div>
   );
 }
