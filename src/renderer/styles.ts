@@ -231,26 +231,31 @@ export const topologyStyles = `
   white-space: nowrap;
 }
 
-.WorkloadTopology__namespace {
+.WorkloadTopology__filter {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-right: 8px;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
-.WorkloadTopology__namespace span {
+.WorkloadTopology__filter span {
   color: var(--textColorSecondary);
-  font-size: 12px;
+  font-size: 11px;
+  flex-shrink: 0;
 }
 
-.WorkloadTopology__namespace select {
-  min-width: 150px;
+.WorkloadTopology__filter select {
+  width: 100px;
   height: 30px;
   padding: 0 8px;
   color: var(--textColorPrimary);
   background: var(--contentColor);
   border: 1px solid var(--borderColor);
   border-radius: 4px;
+  text-align: center;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .WorkloadTopology__actions button {
@@ -480,6 +485,20 @@ export const topologyStyles = `
   opacity: 0.95;
 }
 
+.TopologyCanvas__edges path.relation-blast {
+  stroke-width: 3;
+  opacity: 0.9;
+  stroke-dasharray: 6 3;
+}
+
+.TopologyCanvas__edges path.relation-blast.is-danger {
+  stroke: #d44848;
+}
+
+.TopologyCanvas__edges path.relation-blast.is-warning {
+  stroke: #d99b20;
+}
+
 .TopologyCanvas__marquee {
   position: absolute;
   background: rgba(75, 123, 236, 0.12);
@@ -680,6 +699,14 @@ export const topologyStyles = `
 
 .TopologyCard.relation-connected {
   box-shadow: 0 0 0 2px rgba(127, 180, 255, 0.35), 0 8px 20px rgba(0, 0, 0, 0.22);
+}
+
+.TopologyCard.blast-danger {
+  box-shadow: 0 0 0 2px rgba(212, 72, 72, 0.4), 0 0 12px rgba(212, 72, 72, 0.15);
+}
+
+.TopologyCard.blast-warning {
+  box-shadow: 0 0 0 2px rgba(217, 155, 32, 0.35), 0 0 12px rgba(217, 155, 32, 0.12);
 }
 
 .TopologyCard__header {
@@ -2312,5 +2339,88 @@ export const topologyStyles = `
   height: 1px;
   margin: 4px 10px;
   background: var(--borderColor);
+}
+
+.ConfirmDialog__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.ConfirmDialog {
+  width: 380px;
+  padding: 20px 24px;
+  background: var(--mainBackground, #1e2228);
+  border: 1px solid var(--borderColor);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+}
+
+.ConfirmDialog h3 {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.ConfirmDialog p {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--textColorPrimary);
+  line-height: 1.5;
+}
+
+.ConfirmDialog__hint {
+  color: var(--textColorSecondary) !important;
+  font-size: 12px !important;
+}
+
+.ConfirmDialog__select {
+  width: 100%;
+  height: 32px;
+  margin: 8px 0;
+  padding: 0 8px;
+  color: var(--textColorPrimary);
+  background: var(--contentColor);
+  border: 1px solid var(--borderColor);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.ConfirmDialog__actions button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ConfirmDialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.ConfirmDialog__actions button {
+  height: 32px;
+  padding: 0 16px;
+  border: 1px solid var(--borderColor);
+  border-radius: 6px;
+  background: var(--contentColor);
+  color: var(--textColorPrimary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ConfirmDialog__actions button.is-danger {
+  background: #d44848;
+  border-color: #d44848;
+  color: #fff;
+}
+
+.ConfirmDialog__actions button.is-danger:hover {
+  background: #c03a3a;
 }
 `;

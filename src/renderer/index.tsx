@@ -113,6 +113,7 @@ type ViewportSize = {
 
 type KubeApiLike = {
   update: (descriptor: { name: string; namespace?: string }, data: any) => Promise<unknown>;
+  delete: (descriptor: { name: string; namespace?: string }) => Promise<unknown>;
 };
 
 type PodLogEntry = {
@@ -2280,7 +2281,8 @@ function TopologyCard({
   onDragStart,
   relation,
   onSelect,
-  onContextMenu
+  onContextMenu,
+  blastStatus
 }: {
   node: TopologyNode;
   selected: boolean;
@@ -2288,6 +2290,7 @@ function TopologyCard({
   relation: "normal" | "connected" | "dimmed";
   onSelect: () => void;
   onContextMenu: (event: React.MouseEvent, node: TopologyNode) => void;
+  blastStatus: TopologyStatus | null;
 }) {
   const [hovered, setHovered] = useState(false);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2376,7 +2379,7 @@ function TopologyCard({
   return (
     <button
       type="button"
-      className={`TopologyCard kind-${node.kind} status-${node.status} relation-${relation}${selected ? " is-selected" : ""}`}
+      className={`TopologyCard kind-${node.kind} status-${node.status} relation-${relation}${selected ? " is-selected" : ""}${blastStatus ? ` blast-${blastStatus}` : ""}`}
       style={{ left: node.x, top: node.y }}
       onClick={onSelect}
       onMouseDown={(event) => { handleMouseLeave(); onDragStart(event, node); }}
@@ -4038,7 +4041,10 @@ function WorkloadTopologyPage() {
   const [namespaces, setNamespaces] = useState<string[]>(["default"]);
   const [showIssuesOnly, setShowIssuesOnly] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [labelFilter, setLabelFilter] = useState("");
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: TopologyNode } | null>(null);
+  const [confirmRestart, setConfirmRestart] = useState<TopologyNode | null>(null);
+  const [restartTarget, setRestartTarget] = useState<string>("");
   const [selectedNamespace, setSelectedNamespace] = useState("default");
   const [cronJobWindowHours, setCronJobWindowHours] = useState(24);
   const [isLive, setIsLive] = useState(false);
@@ -4137,7 +4143,47 @@ function WorkloadTopologyPage() {
   const canvasHeight = Math.max(640, topology.nodes.reduce((height, node) => Math.max(height, node.y + cardHeight + 80), 0));
   const resourceCount = visibleResourceCount(filteredResources);
   const availableNamespaces = useMemo(() => namespaceOptions(resources, namespaces), [resources, namespaces]);
+  const availableLabels = useMemo(() => {
+    const labelSet = new Set<string>();
+
+    for (const node of topology.nodes) {
+      const labels = node.object?.metadata?.labels;
+
+      if (labels && typeof labels === "object") {
+        for (const [k, v] of Object.entries(labels as Record<string, string>)) {
+          labelSet.add(`${k}=${v}`);
+        }
+      }
+    }
+
+    return [...labelSet].sort();
+  }, [topology.nodes]);
+  const labelMatchIds = useMemo(() => {
+    if (!labelFilter) return null;
+
+    const matched = new Set<string>();
+
+    for (const node of topology.nodes) {
+      const labels = node.object?.metadata?.labels;
+
+      if (labels && typeof labels === "object") {
+        const entries = Object.entries(labels as Record<string, string>);
+
+        if (entries.some(([k, v]) => `${k}=${v}` === labelFilter)) {
+          matched.add(node.id);
+        }
+      }
+    }
+
+    return matched;
+  }, [labelFilter, topology.nodes]);
   const connectedIds = useMemo(() => connectedNodeIds(selectedNodeId, topology.edges), [selectedNodeId, topology.edges]);
+  const blastRadius = useMemo(() => {
+    if (!selectedNodeId) return null;
+    const node = nodeById.get(selectedNodeId);
+    if (!node || (node.status !== "danger" && node.status !== "warning")) return null;
+    return { status: node.status, ids: connectedIds };
+  }, [selectedNodeId, connectedIds, nodeById]);
   const searchMatchIds = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
 
@@ -4324,6 +4370,15 @@ function WorkloadTopologyPage() {
       });
     }
 
+    if (node.kind === "Pod" || (node.kind === "Pods" && node.pods?.length)) {
+      items.push({
+        label: node.kind === "Pods" ? `Restart Pod (${node.pods!.length})…` : "Restart Pod",
+        icon: "\u21BB",
+        onClick: () => setConfirmRestart(node),
+        separator: true,
+      });
+    }
+
     const nodeEvents = eventsForNode(filteredResources.events, node);
     const hints = causeHintsForEvents(nodeEvents);
 
@@ -4366,6 +4421,26 @@ function WorkloadTopologyPage() {
       x: canvasSize.width / 2 - x * scale,
       y: canvasSize.height / 2 - y * scale
     });
+  }
+
+  function nodeRelation(nodeId: string): "normal" | "connected" | "dimmed" {
+    const filterIds = searchMatchIds ?? labelMatchIds;
+
+    if (filterIds) return filterIds.has(nodeId) ? "connected" : "dimmed";
+    if (selectedNodeId) return connectedIds.has(nodeId) ? "connected" : "dimmed";
+    return "normal";
+  }
+
+  function edgeRelation(fromId: string, toId: string): string | undefined {
+    const filterIds = searchMatchIds ?? labelMatchIds;
+
+    if (filterIds) return filterIds.has(fromId) && filterIds.has(toId) ? "relation-connected" : "relation-dimmed";
+    if (selectedNodeId) {
+      const isConnected = connectedIds.has(fromId) && connectedIds.has(toId);
+      if (!isConnected) return "relation-dimmed";
+      return blastRadius ? `relation-blast is-${blastRadius.status}` : "relation-connected";
+    }
+    return undefined;
   }
 
   function focusNode(node: TopologyNode) {
@@ -4467,6 +4542,34 @@ function WorkloadTopologyPage() {
           </div>
         </div>
         <div className="WorkloadTopology__actions">
+          <label className="WorkloadTopology__filter">
+            <span>Namespace</span>
+            <select
+              value={selectedNamespace}
+              onChange={(event) => {
+                setSelectedNamespace(event.target.value);
+                setSelectedNodeId(null);
+              }}
+            >
+              {availableNamespaces.map((namespace) => (
+                <option key={namespace} value={namespace}>{namespace}</option>
+              ))}
+            </select>
+          </label>
+          {availableLabels.length > 0 && (
+            <label className="WorkloadTopology__filter">
+              <span>Label</span>
+              <select
+                value={labelFilter}
+                onChange={(event) => setLabelFilter(event.target.value)}
+              >
+                <option value="">All</option>
+                {availableLabels.map((label) => (
+                  <option key={label} value={label}>{label}</option>
+                ))}
+              </select>
+            </label>
+          )}
           <div className="WorkloadTopology__search">
             <input
               ref={searchInputRef}
@@ -4489,21 +4592,7 @@ function WorkloadTopologyPage() {
           {searchMatchIds !== null && (
             <span className="WorkloadTopology__searchCount">{searchMatchIds.size} found</span>
           )}
-          <label className="WorkloadTopology__namespace">
-            <span>Namespace</span>
-            <select
-              value={selectedNamespace}
-              onChange={(event) => {
-                setSelectedNamespace(event.target.value);
-                setSelectedNodeId(null);
-              }}
-            >
-              {availableNamespaces.map((namespace) => (
-                <option key={namespace} value={namespace}>{namespace}</option>
-              ))}
-            </select>
-          </label>
-          <label className="WorkloadTopology__namespace">
+          <label className="WorkloadTopology__filter">
             <span>CronJobs</span>
             <select value={cronJobWindowHours} onChange={(event) => setCronJobWindowHours(Number(event.target.value))}>
               <option value={1}>1h</option>
@@ -4511,8 +4600,8 @@ function WorkloadTopologyPage() {
               <option value={168}>7d</option>
             </select>
           </label>
-          <button 
-            type="button" 
+          <button
+            type="button"
             onClick={() => setShowIssuesOnly(prev => !prev)}
             style={{
               background: showIssuesOnly ? "rgba(212, 72, 72, 0.15)" : "var(--contentColor)",
@@ -4699,7 +4788,7 @@ function WorkloadTopologyPage() {
                 return (
                   <path
                     key={edge.id}
-                    className={searchMatchIds ? searchMatchIds.has(edge.from) && searchMatchIds.has(edge.to) ? "relation-connected" : "relation-dimmed" : selectedNodeId ? connectedIds.has(edge.from) && connectedIds.has(edge.to) ? "relation-connected" : "relation-dimmed" : undefined}
+                    className={edgeRelation(edge.from, edge.to)}
                     d={`M ${from.x + cardWidth} ${from.y + cardHeight / 2} C ${from.x + cardWidth + 42} ${from.y + cardHeight / 2}, ${to.x - 42} ${to.y + cardHeight / 2}, ${to.x} ${to.y + cardHeight / 2}`}
                   />
                 );
@@ -4736,7 +4825,8 @@ function WorkloadTopologyPage() {
                 node={node}
                 selected={selectedNodeId === node.id || selectedNodeIds.has(node.id)}
                 onDragStart={handleNodeDragStart}
-                relation={searchMatchIds ? searchMatchIds.has(node.id) ? "connected" : "dimmed" : selectedNodeId ? connectedIds.has(node.id) ? "connected" : "dimmed" : "normal"}
+                relation={nodeRelation(node.id)}
+                blastStatus={blastRadius && connectedIds.has(node.id) && node.id !== selectedNodeId ? blastRadius.status : null}
                 onSelect={() => {
                   const wasAlreadySelected = nodeDragStart.current?.wasAlreadySelected;
                   const didDrag = nodeDragStart.current?.didDrag;
@@ -4818,6 +4908,60 @@ function WorkloadTopologyPage() {
           onClose={() => setContextMenu(null)}
         />
       ) : null}
+      {confirmRestart ? (() => {
+        const isGroup = confirmRestart.kind === "Pods" && confirmRestart.pods?.length;
+        const pods = isGroup ? confirmRestart.pods! : [];
+        const targetName = isGroup ? restartTarget : confirmRestart.name;
+        const targetNamespace = isGroup
+          ? (pods.find((p) => getName(p) === restartTarget)
+              ? getNamespace(pods.find((p) => getName(p) === restartTarget)!)
+              : confirmRestart.namespace)
+          : confirmRestart.namespace;
+
+        return (
+          <div className="ConfirmDialog__backdrop" onMouseDown={() => { setConfirmRestart(null); setRestartTarget(""); }}>
+            <div className="ConfirmDialog" onMouseDown={(e) => e.stopPropagation()}>
+              <h3>Restart Pod</h3>
+              {isGroup ? (
+                <>
+                  <p>Select a pod to restart:</p>
+                  <select
+                    className="ConfirmDialog__select"
+                    value={restartTarget}
+                    onChange={(e) => setRestartTarget(e.target.value)}
+                  >
+                    <option value="">-- Select pod --</option>
+                    {pods.map((pod) => (
+                      <option key={getName(pod)} value={getName(pod)}>{getName(pod)}</option>
+                    ))}
+                  </select>
+                </>
+              ) : (
+                <p>Are you sure you want to restart <strong>{confirmRestart.name}</strong>?</p>
+              )}
+              <p className="ConfirmDialog__hint">The pod will be deleted. If managed by a Deployment, it will be recreated automatically.</p>
+              <div className="ConfirmDialog__actions">
+                <button type="button" onClick={() => { setConfirmRestart(null); setRestartTarget(""); }}>Cancel</button>
+                <button type="button" className="is-danger" disabled={!targetName} onClick={() => {
+                  setConfirmRestart(null);
+                  setRestartTarget("");
+                  void (async () => {
+                    try {
+                      await K8sApi.podsApi.delete({ name: targetName, namespace: targetNamespace });
+                      setCopied(`Restarted ${targetName}`);
+                      setTimeout(() => setCopied(null), 2000);
+                      void loadResources({ silent: true });
+                    } catch (err) {
+                      setCopied(null);
+                      setError(err instanceof Error ? err.message : "Failed to restart pod");
+                    }
+                  })();
+                }}>Restart</button>
+              </div>
+            </div>
+          </div>
+        );
+      })() : null}
       {statusToasts.length > 0 ? (
         <div className="StatusToasts">
           {statusToasts.map((toast) => (
