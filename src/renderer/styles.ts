@@ -858,6 +858,61 @@ export const topologyStyles = `
   white-space: nowrap;
 }
 
+.TopologyCard__tooltip.is-wide {
+  min-width: 320px;
+  max-width: 420px;
+}
+
+.TopologyCard__tooltipSep {
+  height: 1px;
+  margin: 5px 0;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.TopologyCard__tooltipTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10px;
+}
+
+.TopologyCard__tooltipTable th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--textColorSecondary);
+  padding: 2px 4px 3px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  white-space: nowrap;
+}
+
+.TopologyCard__tooltipTable th:nth-child(n+2) {
+  text-align: right;
+}
+
+.TopologyCard__tooltipTable td {
+  padding: 2px 4px;
+  color: var(--textColorPrimary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+
+.TopologyCard__tooltipTable td:nth-child(n+2) {
+  text-align: right;
+  color: var(--textColorSecondary);
+}
+
+.TopologyCard__tooltipTable tr.is-warn td:first-child {
+  color: #d99b20;
+}
+
+.TopologyCard__tooltipMore {
+  text-align: center;
+  font-size: 10px;
+  color: var(--textColorSecondary);
+  padding: 3px 0 0;
+}
+
 .StatusToasts {
   position: fixed;
   bottom: 20px;

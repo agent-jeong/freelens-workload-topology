@@ -2230,7 +2230,35 @@ function TopologyContextMenu({
   );
 }
 
-function buildTooltipRows(node: TopologyNode): Array<{ label: string; value: string }> {
+function parseCpu(value: string): number {
+  if (value.endsWith("m")) return Number(value.slice(0, -1));
+  if (value.endsWith("n")) return Number(value.slice(0, -1)) / 1e6;
+  return Number(value) * 1000;
+}
+
+function formatCpu(millis: number): string {
+  if (millis >= 1000) return `${(millis / 1000).toFixed(1)} cores`;
+  return `${Math.round(millis)}m`;
+}
+
+function parseMem(value: string): number {
+  const units: Record<string, number> = { Ki: 1024, Mi: 1048576, Gi: 1073741824, Ti: 1099511627776, K: 1e3, M: 1e6, G: 1e9, T: 1e12 };
+
+  for (const [suffix, multiplier] of Object.entries(units)) {
+    if (value.endsWith(suffix)) return Number(value.slice(0, -suffix.length)) * multiplier;
+  }
+
+  return Number(value);
+}
+
+function formatMem(bytes: number): string {
+  if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(1)} Gi`;
+  if (bytes >= 1048576) return `${Math.round(bytes / 1048576)} Mi`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} Ki`;
+  return `${bytes} B`;
+}
+
+function buildTooltipRows(node: TopologyNode, metricsMap: Map<string, PodMetrics>): Array<{ label: string; value: string }> {
   const rows: Array<{ label: string; value: string }> = [];
   const spec = node.object?.spec as any;
   const status = node.object?.status as any;
@@ -2241,7 +2269,41 @@ function buildTooltipRows(node: TopologyNode): Array<{ label: string; value: str
     rows.push({ label: "Age", value: `${days}d` });
   }
 
-  if (node.kind === "Pod") {
+  if (node.kind === "Pods" && node.pods?.length) {
+    const pods = node.pods;
+    const running = pods.filter((p) => (p as any).status?.phase === "Running").length;
+    const totalRestarts = pods.reduce((sum, p) => {
+      const cs = (p as any).status?.containerStatuses;
+      return sum + (cs ? cs.reduce((s: number, c: any) => s + (c.restartCount || 0), 0) : 0);
+    }, 0);
+
+    rows.push({ label: "Pods", value: `${running}/${pods.length} running` });
+
+    let totalCpuUsage = 0; let totalMemUsage = 0; let hasMetrics = false;
+
+    for (const pod of pods) {
+      const m = metricsMap.get(getName(pod));
+      if (m) { totalCpuUsage += m.cpu; totalMemUsage += m.memory; hasMetrics = true; }
+    }
+
+    if (hasMetrics) {
+      rows.push({ label: "CPU Usage", value: formatCpu(totalCpuUsage) });
+      rows.push({ label: "Mem Usage", value: formatMem(totalMemUsage) });
+    } else {
+      let totalCpuReq = 0; let totalMemReq = 0; let hasCpu = false; let hasMem = false;
+      for (const pod of pods) {
+        for (const c of ((pod as any).spec?.containers ?? [])) {
+          const req = c.resources?.requests;
+          if (req?.cpu) { totalCpuReq += parseCpu(req.cpu); hasCpu = true; }
+          if (req?.memory) { totalMemReq += parseMem(req.memory); hasMem = true; }
+        }
+      }
+      if (hasCpu) rows.push({ label: "CPU Req", value: formatCpu(totalCpuReq) });
+      if (hasMem) rows.push({ label: "Mem Req", value: formatMem(totalMemReq) });
+    }
+
+    if (totalRestarts > 0) rows.push({ label: "Restarts", value: String(totalRestarts) });
+  } else if (node.kind === "Pod") {
     const podIP = status?.podIP;
     const nodeName = spec?.nodeName;
     const image = spec?.containers?.[0]?.image;
@@ -2251,6 +2313,22 @@ function buildTooltipRows(node: TopologyNode): Array<{ label: string; value: str
     if (nodeName) rows.push({ label: "Node", value: nodeName });
     if (image) rows.push({ label: "Image", value: image.split("/").pop() ?? image });
     if (restarts > 0) rows.push({ label: "Restarts", value: String(restarts) });
+
+    const m = metricsMap.get(node.name);
+    if (m) {
+      rows.push({ label: "CPU Usage", value: formatCpu(m.cpu) });
+      rows.push({ label: "Mem Usage", value: formatMem(m.memory) });
+    } else {
+      const containers = spec?.containers ?? [];
+      let cpuReq = 0; let memReq = 0; let hasCpu = false; let hasMem = false;
+      for (const c of containers) {
+        const req = c.resources?.requests;
+        if (req?.cpu) { cpuReq += parseCpu(req.cpu); hasCpu = true; }
+        if (req?.memory) { memReq += parseMem(req.memory); hasMem = true; }
+      }
+      if (hasCpu) rows.push({ label: "CPU Req", value: formatCpu(cpuReq) });
+      if (hasMem) rows.push({ label: "Mem Req", value: formatMem(memReq) });
+    }
   } else if (node.kind === "Deployment") {
     const ready = status?.readyReplicas ?? 0;
     const desired = spec?.replicas ?? 0;
@@ -2282,7 +2360,8 @@ function TopologyCard({
   relation,
   onSelect,
   onContextMenu,
-  blastStatus
+  blastStatus,
+  metrics
 }: {
   node: TopologyNode;
   selected: boolean;
@@ -2291,6 +2370,7 @@ function TopologyCard({
   onSelect: () => void;
   onContextMenu: (event: React.MouseEvent, node: TopologyNode) => void;
   blastStatus: TopologyStatus | null;
+  metrics: Map<string, PodMetrics>;
 }) {
   const [hovered, setHovered] = useState(false);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2365,7 +2445,36 @@ function TopologyCard({
 
   const primaryProblem = node.problems?.[0];
   const problemTitle = node.problems?.map((problem) => problem.message).join("\n");
-  const tooltipRows = useMemo(() => buildTooltipRows(node), [node]);
+  const tooltipRows = useMemo(() => buildTooltipRows(node, metrics), [node, metrics]);
+  const tooltipPods = useMemo(() => {
+    if (node.kind !== "Pods" || !node.pods?.length) return null;
+
+    return node.pods.slice(0, 10).map((pod) => {
+      const s = (pod as any).status;
+      const sp = (pod as any).spec;
+      const phase = s?.phase ?? "Unknown";
+      const restarts = s?.containerStatuses?.reduce((sum: number, c: any) => sum + (c.restartCount || 0), 0) ?? 0;
+      const podName = getName(pod);
+      const m = metrics.get(podName);
+
+      let cpu: string; let mem: string;
+      if (m) {
+        cpu = formatCpu(m.cpu);
+        mem = formatMem(m.memory);
+      } else {
+        let reqCpu = 0; let reqMem = 0; let hasCpu = false; let hasMem = false;
+        for (const c of sp?.containers ?? []) {
+          const req = c.resources?.requests;
+          if (req?.cpu) { reqCpu += parseCpu(req.cpu); hasCpu = true; }
+          if (req?.memory) { reqMem += parseMem(req.memory); hasMem = true; }
+        }
+        cpu = hasCpu ? formatCpu(reqCpu) + " (req)" : "-";
+        mem = hasMem ? formatMem(reqMem) + " (req)" : "-";
+      }
+
+      return { name: podName, phase, cpu, mem, restarts };
+    });
+  }, [node, metrics]);
 
   function handleMouseEnter() {
     hoverTimer.current = setTimeout(() => setHovered(true), 400);
@@ -2404,14 +2513,38 @@ function TopologyCard({
           {primaryProblem.message}
         </div>
       ) : null}
-      {hovered && tooltipRows.length > 0 && !selected ? (
-        <div className="TopologyCard__tooltip">
+      {hovered && (tooltipRows.length > 0 || tooltipPods) && !selected ? (
+        <div className={`TopologyCard__tooltip${tooltipPods ? " is-wide" : ""}`}>
           {tooltipRows.map((row) => (
             <div key={row.label} className="TopologyCard__tooltipRow">
               <span>{row.label}</span>
               <strong>{row.value}</strong>
             </div>
           ))}
+          {tooltipPods ? (
+            <>
+              <div className="TopologyCard__tooltipSep" />
+              <table className="TopologyCard__tooltipTable">
+                <thead>
+                  <tr><th>Pod</th><th>Status</th><th>CPU</th><th>Mem</th><th>R</th></tr>
+                </thead>
+                <tbody>
+                  {tooltipPods.map((p) => (
+                    <tr key={p.name} className={p.phase !== "Running" ? "is-warn" : ""}>
+                      <td title={p.name}>{p.name.length > 28 ? `…${p.name.slice(-27)}` : p.name}</td>
+                      <td>{p.phase}</td>
+                      <td>{p.cpu}</td>
+                      <td>{p.mem}</td>
+                      <td>{p.restarts || "-"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {node.pods && node.pods.length > 10 ? (
+                <div className="TopologyCard__tooltipMore">+{node.pods.length - 10} more</div>
+              ) : null}
+            </>
+          ) : null}
         </div>
       ) : null}
     </button>
@@ -3301,6 +3434,56 @@ function useTopologyStyles() {
   }, []);
 }
 
+type PodMetrics = {
+  podName: string;
+  namespace: string;
+  cpu: number;
+  memory: number;
+};
+
+async function fetchPodMetrics(namespace: string): Promise<PodMetrics[]> {
+  try {
+    const api = K8sApi.podsApi as any;
+    const path = `/apis/metrics.k8s.io/v1beta1/namespaces/${namespace}/pods`;
+
+    // Use relative path through same-origin proxy
+    const req = api.request;
+    const apiBase = req?.config?.apiBase ?? "/api-kube";
+    const url = `${apiBase}${path}`;
+
+    const r = await fetch(url);
+    if (!r.ok) return [];
+    const response = await r.json();
+
+    if (!response) return [];
+
+    const items = response?.items ?? [];
+
+    if (!Array.isArray(items)) return [];
+
+    return items.map((item: any) => {
+      const containers = item.containers ?? [];
+      let cpu = 0;
+      let mem = 0;
+
+      for (const c of containers) {
+        if (c.usage?.cpu) cpu += parseCpu(c.usage.cpu);
+        if (c.usage?.memory) mem += parseMem(c.usage.memory);
+      }
+
+      return {
+        podName: item.metadata?.name ?? "",
+        namespace: item.metadata?.namespace ?? namespace,
+        cpu,
+        memory: mem,
+      };
+    });
+  } catch (e) {
+    console.error("[metrics] top-level error:", e);
+    return [];
+  }
+}
+
 async function listOrEmpty(api?: { list: () => Promise<unknown> }) {
   try {
     if (!api) {
@@ -3727,6 +3910,7 @@ function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: () => vo
   const [selectedContainer, setSelectedContainer] = useState("all");
   const [errorsOnly, setErrorsOnly] = useState(false);
   const [wrapLogs, setWrapLogs] = useState(false);
+  const [autoScroll, setAutoScroll] = useState(false);
   const [selectedMatchIndex, setSelectedMatchIndex] = useState(0);
   const logBodyRef = useRef<HTMLDivElement | null>(null);
   const lineRefs = useRef<Array<HTMLDivElement | null>>([]);
@@ -3819,12 +4003,12 @@ function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: () => vo
   }, [filteredLines.length, selectedMatchIndex]);
 
   useEffect(() => {
-    if (!live || previous || query.trim() || !logBodyRef.current) {
+    if (!live || previous || query.trim() || !autoScroll || !logBodyRef.current) {
       return;
     }
 
     logBodyRef.current.scrollTop = logBodyRef.current.scrollHeight;
-  }, [filteredLines, live, previous, query]);
+  }, [filteredLines, live, previous, query, autoScroll]);
 
   useEffect(() => {
     if (!query.trim() || matchCount === 0) {
@@ -3892,6 +4076,15 @@ function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: () => vo
           </label>
           <button type="button" className={live && !previous ? "is-active" : ""} disabled={previous} onClick={() => setLive((value) => !value)}>
             Live
+          </button>
+          <button
+            type="button"
+            className={autoScroll ? "is-active" : ""}
+            disabled={!live || previous}
+            onClick={() => setAutoScroll((value) => !value)}
+            title="Auto-scroll to latest logs"
+          >
+            Auto-scroll
           </button>
           <button
             type="button"
@@ -4066,6 +4259,7 @@ function WorkloadTopologyPage() {
   const suppressLayoutSave = useRef(false);
   const liveRefreshInFlight = useRef(false);
   const prevNodeStatuses = useRef<Map<string, TopologyStatus>>(new Map());
+  const [podMetrics, setPodMetrics] = useState<Map<string, PodMetrics>>(new Map());
   const [statusToasts, setStatusToasts] = useState<Array<{ id: number; name: string; kind: string; from: TopologyStatus; to: TopologyStatus }>>([]);
   const toastCounter = useRef(0);
   const [canvasSize, setCanvasSize] = useState<ViewportSize>({ width: 1, height: 1 });
@@ -4126,6 +4320,24 @@ function WorkloadTopologyPage() {
 
     return () => clearInterval(interval);
   }, [isLive]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadMetrics() {
+      const metrics = await fetchPodMetrics(selectedNamespace);
+
+      if (!cancelled && metrics.length > 0) {
+        setPodMetrics(new Map(metrics.map((m) => [m.podName, m])));
+      }
+    }
+
+    void loadMetrics();
+
+    const interval = setInterval(loadMetrics, isLive ? 8000 : 30000);
+
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [selectedNamespace, isLive]);
 
   const filteredResources = useMemo(() => filterByNamespace(resources, selectedNamespace), [resources, selectedNamespace]);
   const baseTopology = useMemo(() => buildTopology(filteredResources, cronJobWindowHours), [filteredResources, cronJobWindowHours]);
@@ -4843,6 +5055,7 @@ function WorkloadTopologyPage() {
                   event.preventDefault();
                   setContextMenu({ x: event.clientX, y: event.clientY, node: n });
                 }}
+                metrics={podMetrics}
               />
               );
             })}
