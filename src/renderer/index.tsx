@@ -154,6 +154,8 @@ const minimapWidth = 210;
 const minimapHeight = 132;
 const layoutStoragePrefix = "freelens-workload-topology-layout";
 const podGroupThreshold = 2;
+const METRICS_INSTALL_CMD = "kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml";
+const METRICS_PATCH_CMD = "kubectl patch deployment metrics-server -n kube-system --type='json' -p='[{\"op\": \"add\", \"path\": \"/spec/template/spec/containers/0/args/-\", \"value\": \"--kubelet-insecure-tls\"}]'";
 
 const columnX: Record<TopologyKind, number> = {
   Ingress: 60,
@@ -697,7 +699,7 @@ function jsonMeaningRows(kind: TopologyKind, object: any): Array<{ path: string;
 }
 
 function editableObject(object: KubeObjectLike): any {
-  const copy = JSON.parse(JSON.stringify(objectForCopy(object)));
+  const copy = objectForCopy(object) as any;
 
   delete copy.status;
 
@@ -2367,7 +2369,7 @@ function buildTooltipRows(node: TopologyNode, metricsMap: Map<string, PodMetrics
   return rows;
 }
 
-function TopologyCard({
+const TopologyCard = React.memo(function TopologyCard({
   node,
   selected,
   onDragStart,
@@ -2381,7 +2383,7 @@ function TopologyCard({
   selected: boolean;
   onDragStart: (event: React.MouseEvent, node: TopologyNode) => void;
   relation: "normal" | "connected" | "dimmed";
-  onSelect: () => void;
+  onSelect: (nodeId: string) => void;
   onContextMenu: (event: React.MouseEvent, node: TopologyNode) => void;
   blastStatus: TopologyStatus | null;
   metrics: Map<string, PodMetrics>;
@@ -2504,7 +2506,7 @@ function TopologyCard({
       type="button"
       className={`TopologyCard kind-${node.kind} status-${node.status} relation-${relation}${selected ? " is-selected" : ""}${blastStatus ? ` blast-${blastStatus}` : ""}`}
       style={{ left: node.x, top: node.y }}
-      onClick={onSelect}
+      onClick={() => onSelect(node.id)}
       onMouseDown={(event) => { handleMouseLeave(); onDragStart(event, node); }}
       onContextMenu={(event) => onContextMenu(event, node)}
       onMouseEnter={handleMouseEnter}
@@ -2566,7 +2568,7 @@ function TopologyCard({
       ) : null}
     </button>
   );
-}
+});
 
 function TopologyMinimap({
   canvasHeight,
@@ -3924,6 +3926,86 @@ function logMessageKey(line: Pick<PodLogLine, "displayMessage" | "message">): st
   return cleanLogMessage(line.displayMessage || line.message);
 }
 
+const LOG_LINE_HEIGHT = 24;
+const LOG_OVERSCAN = 20;
+
+function VirtualLogList({
+  lines,
+  query,
+  selectedMatchIndex,
+  wrapLogs,
+  logBodyRef,
+  lineRefs,
+  onExclude,
+}: {
+  lines: PodLogLine[];
+  query: string;
+  selectedMatchIndex: number;
+  wrapLogs: boolean;
+  logBodyRef: React.MutableRefObject<HTMLDivElement | null>;
+  lineRefs: React.MutableRefObject<Array<HTMLDivElement | null>>;
+  onExclude: (line: PodLogLine) => void;
+}) {
+  const [scrollTop, setScrollTop] = useState(0);
+  const [containerHeight, setContainerHeight] = useState(600);
+
+  useEffect(() => {
+    const el = logBodyRef.current;
+    if (!el) return;
+    setContainerHeight(el.clientHeight);
+    const ro = new ResizeObserver(() => setContainerHeight(el.clientHeight));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    setScrollTop(e.currentTarget.scrollTop);
+  };
+
+  const totalHeight = lines.length * LOG_LINE_HEIGHT;
+  const startIndex = Math.max(0, Math.floor(scrollTop / LOG_LINE_HEIGHT) - LOG_OVERSCAN);
+  const endIndex = Math.min(lines.length, Math.ceil((scrollTop + containerHeight) / LOG_LINE_HEIGHT) + LOG_OVERSCAN);
+  const visibleLines = lines.slice(startIndex, endIndex);
+
+  return (
+    <div
+      className={`PodLogsModal__terminal${wrapLogs ? " is-wrapped" : ""}`}
+      ref={logBodyRef}
+      onScroll={handleScroll}
+    >
+      <div style={{ height: totalHeight, position: "relative" }}>
+        {visibleLines.map((line, i) => {
+          const index = startIndex + i;
+          const displayTimestamp = line.timestamp ? line.timestamp.replace("T", " ").replace("Z", "") : "";
+          const displaySource = `${line.podName}/${line.containerName}`;
+
+          return (
+            <div
+              key={line.id}
+              ref={(element) => { lineRefs.current[index] = element; }}
+              className={`PodLogsModal__line source-${line.sourceIndex % 8} severity-${line.severity}${line.error ? " is-error" : ""}${query.trim() && index === selectedMatchIndex ? " is-current-match" : ""}`}
+              style={{ position: "absolute", top: index * LOG_LINE_HEIGHT, left: 0, right: 0, height: LOG_LINE_HEIGHT }}
+            >
+              <span className="PodLogsModal__time">{highlightLogText(displayTimestamp, query)}</span>
+              <span className="PodLogsModal__severity">{line.severity === "unknown" ? "" : line.severity.toUpperCase()}</span>
+              <span className="PodLogsModal__source" title={`${line.podName} / ${line.containerName}`}>{highlightLogText(displaySource, query)}</span>
+              <span className="PodLogsModal__message" title={line.message}>{highlightLogText(wrapLogs ? line.wrappedDisplayMessage : line.displayMessage, query)}</span>
+              <button
+                type="button"
+                className="PodLogsModal__excludeButton"
+                title="Hide similar logs"
+                onClick={() => onExclude(line)}
+              >
+                &minus;
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: () => void }) {
   const [entries, setEntries] = useState<PodLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -4050,12 +4132,14 @@ function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: () => vo
   }, [filteredLines, live, previous, query, autoScroll]);
 
   useEffect(() => {
-    if (!query.trim() || matchCount === 0) {
+    if (!debouncedQuery.trim() || matchCount === 0 || !logBodyRef.current) {
       return;
     }
 
-    lineRefs.current[selectedMatchIndex]?.scrollIntoView({ block: "center" });
-  }, [selectedMatchIndex, matchCount, query]);
+    const targetTop = selectedMatchIndex * LOG_LINE_HEIGHT;
+    const containerH = logBodyRef.current.clientHeight;
+    logBodyRef.current.scrollTop = targetTop - containerH / 2 + LOG_LINE_HEIGHT / 2;
+  }, [selectedMatchIndex, matchCount, debouncedQuery]);
 
   function moveMatch(delta: number) {
     if (matchCount === 0) {
@@ -4219,37 +4303,15 @@ function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: () => vo
         ) : allLines.length === 0 ? (
           <div className="PodLogsModal__state">No pod logs available.</div>
         ) : (
-          <div className={`PodLogsModal__terminal${wrapLogs ? " is-wrapped" : ""}`} ref={logBodyRef}>
-            {filteredLines.map((line, index) => {
-              const displayTimestamp = line.timestamp ? line.timestamp.replace("T", " ").replace("Z", "") : "";
-              const displaySource = `${line.podName}/${line.containerName}`;
-
-              return (
-              <div
-                key={line.id}
-                ref={(element) => { lineRefs.current[index] = element; }}
-                className={`PodLogsModal__line source-${line.sourceIndex % 8} severity-${line.severity}${line.error ? " is-error" : ""}${query.trim() && index === selectedMatchIndex ? " is-current-match" : ""}`}
-              >
-                <span className="PodLogsModal__time">{highlightLogText(displayTimestamp, query)}</span>
-                <span className="PodLogsModal__severity">{line.severity === "unknown" ? "" : line.severity.toUpperCase()}</span>
-                <span className="PodLogsModal__source" title={`${line.podName} / ${line.containerName}`}>{highlightLogText(displaySource, query)}</span>
-                <span className="PodLogsModal__message" title={line.message}>{highlightLogText(wrapLogs ? line.wrappedDisplayMessage : line.displayMessage, query)}</span>
-                <button
-                  type="button"
-                  className="PodLogsModal__excludeButton"
-                  title="Hide similar logs"
-                  onClick={() => setExcludedMessages(prev => {
-                    const next = new Set(prev);
-                    next.add(logMessageKey(line));
-                    return next;
-                  })}
-                >
-                  &minus;
-                </button>
-              </div>
-              );
-            })}
-          </div>
+          <VirtualLogList
+            lines={filteredLines}
+            query={query}
+            selectedMatchIndex={selectedMatchIndex}
+            wrapLogs={wrapLogs}
+            logBodyRef={logBodyRef}
+            lineRefs={lineRefs}
+            onExclude={(line) => setExcludedMessages((prev) => { const next = new Set(prev); next.add(logMessageKey(line)); return next; })}
+          />
         )}
       </section>
     </div>
@@ -4459,6 +4521,18 @@ function WorkloadTopologyPage() {
 
     return matched;
   }, [searchQuery, topology.nodes]);
+  const edgePaths = useMemo(() => topology.edges.map((edge) => {
+    const from = nodeById.get(edge.from);
+    const to = nodeById.get(edge.to);
+    if (!from || !to) return null;
+    return {
+      id: edge.id,
+      from: edge.from,
+      to: edge.to,
+      d: `M ${from.x + cardWidth} ${from.y + cardHeight / 2} C ${from.x + cardWidth + 42} ${from.y + cardHeight / 2}, ${to.x - 42} ${to.y + cardHeight / 2}, ${to.x} ${to.y + cardHeight / 2}`,
+    };
+  }).filter(Boolean) as Array<{ id: string; from: string; to: string; d: string }>, [topology.edges, nodeById]);
+
   const issueNodes = useMemo(() => topology.nodes
     .filter((node) => node.status === "danger" || node.status === "warning")
     .sort((left, right) =>
@@ -4466,6 +4540,8 @@ function WorkloadTopologyPage() {
       left.kind.localeCompare(right.kind) ||
       left.name.localeCompare(right.name)
     ), [topology.nodes]);
+  const dangerCount = useMemo(() => issueNodes.filter((n) => n.status === "danger").length, [issueNodes]);
+  const warningCount = useMemo(() => issueNodes.filter((n) => n.status === "warning").length, [issueNodes]);
 
   useEffect(() => {
     const prev = prevNodeStatuses.current;
@@ -4637,7 +4713,7 @@ function WorkloadTopologyPage() {
   function buildContextMenuItems(node: TopologyNode): ContextMenuItem[] {
     const items: ContextMenuItem[] = [
       { label: "Copy name", icon: "\u2398", onClick: () => void handleCopy("name", node.name) },
-      { label: "Copy JSON", icon: "\u007B\u007D", onClick: () => void handleCopy("JSON", JSON.stringify(objectForCopy(node.object), null, 2)) },
+      { label: "Copy JSON", icon: "\u007B\u007D", onClick: () => void handleCopy("JSON", stringifyObject(node.object)) },
       { label: "Copy YAML", icon: "\u2B1A", onClick: () => void handleCopy("YAML", YAML.stringify(objectForCopy(node.object))) },
     ];
 
@@ -4754,15 +4830,37 @@ function WorkloadTopologyPage() {
     }));
   }
 
-  function handleNodeDragStart(event: React.MouseEvent, node: TopologyNode) {
-    event.stopPropagation();
+  const handleNodeSelect = React.useCallback((nodeId: string) => {
+    const wasAlreadySelected = nodeDragStart.current?.wasAlreadySelected;
+    const didDrag = nodeDragStart.current?.didDrag;
 
-    const isMultiSelected = selectedNodeIds.has(node.id) && selectedNodeIds.size > 1;
-    const dragIds = isMultiSelected ? [...selectedNodeIds] : [node.id];
+    if (wasAlreadySelected && !didDrag) {
+      setSelectedNodeId(null);
+      setSelectedNodeIds(new Set());
+    } else if (!wasAlreadySelected) {
+      setSelectedNodeId(nodeId);
+      setSelectedNodeIds(new Set([nodeId]));
+    }
+  }, []);
+
+  const handleNodeContextMenu = React.useCallback((event: React.MouseEvent, node: TopologyNode) => {
+    event.preventDefault();
+    setContextMenu({ x: event.clientX, y: event.clientY, node });
+  }, []);
+
+  const stateRef = useRef({ selectedNodeId, selectedNodeIds, nodeById });
+  stateRef.current = { selectedNodeId, selectedNodeIds, nodeById };
+
+  const handleNodeDragStart = React.useCallback((event: React.MouseEvent, node: TopologyNode) => {
+    event.stopPropagation();
+    const { selectedNodeId: selId, selectedNodeIds: selIds, nodeById: nById } = stateRef.current;
+
+    const isMultiSelected = selIds.has(node.id) && selIds.size > 1;
+    const dragIds = isMultiSelected ? [...selIds] : [node.id];
     const origins: Record<string, { x: number; y: number }> = {};
 
     for (const id of dragIds) {
-      const n = nodeById.get(id);
+      const n = nById.get(id);
 
       if (n) {
         origins[id] = { x: n.x, y: n.y };
@@ -4774,7 +4872,7 @@ function WorkloadTopologyPage() {
       x: event.clientX,
       y: event.clientY,
       origins,
-      wasAlreadySelected: selectedNodeId === node.id || selectedNodeIds.has(node.id),
+      wasAlreadySelected: selId === node.id || selIds.has(node.id),
       didDrag: false
     };
 
@@ -4782,7 +4880,7 @@ function WorkloadTopologyPage() {
       setSelectedNodeId(node.id);
       setSelectedNodeIds(new Set([node.id]));
     }
-  }
+  }, []);
 
   return (
     <div className="WorkloadTopology">
@@ -4807,14 +4905,14 @@ function WorkloadTopologyPage() {
             {issueNodes.length > 0 ? (
               <>
                 <span className="WorkloadTopology__summaryDivider" />
-                {issueNodes.filter((n) => n.status === "danger").length > 0 && (
+                {dangerCount > 0 && (
                   <span className="WorkloadTopology__statusBadge is-danger">
-                    {issueNodes.filter((n) => n.status === "danger").length} danger
+                    {dangerCount} danger
                   </span>
                 )}
-                {issueNodes.filter((n) => n.status === "warning").length > 0 && (
+                {warningCount > 0 && (
                   <span className="WorkloadTopology__statusBadge is-warning">
-                    {issueNodes.filter((n) => n.status === "warning").length} warning
+                    {warningCount} warning
                   </span>
                 )}
               </>
@@ -4936,20 +5034,12 @@ function WorkloadTopologyPage() {
           {metricsHint === "not-installed" ? (
             <>
               <span>⚠ Metrics server not installed. Install and configure with:</span>
-              <code
-                className="WorkloadTopology__metricsCmd"
-                title="Click to copy install command"
-                onClick={() => void copyText("kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml")}
-              >
-                kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+              <code className="WorkloadTopology__metricsCmd" title="Click to copy install command" onClick={() => void copyText(METRICS_INSTALL_CMD)}>
+                {METRICS_INSTALL_CMD}
               </code>
               <span className="WorkloadTopology__metricsSubHint">For self-signed cert clusters, also run:</span>
-              <code
-                className="WorkloadTopology__metricsCmd"
-                title="Click to copy patch command"
-                onClick={() => void copyText("kubectl patch deployment metrics-server -n kube-system --type='json' -p='[{\"op\": \"add\", \"path\": \"/spec/template/spec/containers/0/args/-\", \"value\": \"--kubelet-insecure-tls\"}]'")}
-              >
-                kubectl patch deployment metrics-server -n kube-system --type=&apos;json&apos; -p=&apos;[&#123;&quot;op&quot;:&quot;add&quot;,&quot;path&quot;:&quot;/spec/template/spec/containers/0/args/-&quot;,&quot;value&quot;:&quot;--kubelet-insecure-tls&quot;&#125;]&apos;
+              <code className="WorkloadTopology__metricsCmd" title="Click to copy patch command" onClick={() => void copyText(METRICS_PATCH_CMD)}>
+                {METRICS_PATCH_CMD}
               </code>
             </>
           ) : metricsHint === "forbidden" ? (
@@ -4958,12 +5048,8 @@ function WorkloadTopologyPage() {
             <>
               <span>⚠ Metrics unavailable ({metricsHint})</span>
               <span className="WorkloadTopology__metricsSubHint">If using self-signed certs, add <code>--kubelet-insecure-tls</code> to metrics-server:</span>
-              <code
-                className="WorkloadTopology__metricsCmd"
-                title="Click to copy"
-                onClick={() => void copyText("kubectl patch deployment metrics-server -n kube-system --type='json' -p='[{\"op\": \"add\", \"path\": \"/spec/template/spec/containers/0/args/-\", \"value\": \"--kubelet-insecure-tls\"}]'")}
-              >
-                kubectl patch deployment metrics-server -n kube-system --type=&apos;json&apos; -p=&apos;[&#123;&quot;op&quot;:&quot;add&quot;,&quot;path&quot;:&quot;/spec/template/spec/containers/0/args/-&quot;,&quot;value&quot;:&quot;--kubelet-insecure-tls&quot;&#125;]&apos;
+              <code className="WorkloadTopology__metricsCmd" title="Click to copy" onClick={() => void copyText(METRICS_PATCH_CMD)}>
+                {METRICS_PATCH_CMD}
               </code>
             </>
           )}
@@ -5092,15 +5178,8 @@ function WorkloadTopologyPage() {
           </button>
           <div className="TopologyCanvas__content" style={{ height: canvasHeight, transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }}>
             <svg className="TopologyCanvas__edges" width={canvasWidth} height={canvasHeight}>
-              {topology.edges.map((edge) => {
+              {edgePaths.map((edge) => {
                 if (showIssuesOnly && (!issueNodeIds.has(edge.from) || !issueNodeIds.has(edge.to))) {
-                  return null;
-                }
-
-                const from = nodeById.get(edge.from);
-                const to = nodeById.get(edge.to);
-
-                if (!from || !to) {
                   return null;
                 }
 
@@ -5108,7 +5187,7 @@ function WorkloadTopologyPage() {
                   <path
                     key={edge.id}
                     className={edgeRelation(edge.from, edge.to)}
-                    d={`M ${from.x + cardWidth} ${from.y + cardHeight / 2} C ${from.x + cardWidth + 42} ${from.y + cardHeight / 2}, ${to.x - 42} ${to.y + cardHeight / 2}, ${to.x} ${to.y + cardHeight / 2}`}
+                    d={edge.d}
                   />
                 );
               })}
@@ -5146,22 +5225,8 @@ function WorkloadTopologyPage() {
                 onDragStart={handleNodeDragStart}
                 relation={nodeRelation(node.id)}
                 blastStatus={blastRadius && connectedIds.has(node.id) && node.id !== selectedNodeId ? blastRadius.status : null}
-                onSelect={() => {
-                  const wasAlreadySelected = nodeDragStart.current?.wasAlreadySelected;
-                  const didDrag = nodeDragStart.current?.didDrag;
-
-                  if (wasAlreadySelected && !didDrag) {
-                    setSelectedNodeId(null);
-                    setSelectedNodeIds(new Set());
-                  } else if (!wasAlreadySelected) {
-                    setSelectedNodeId(node.id);
-                    setSelectedNodeIds(new Set([node.id]));
-                  }
-                }}
-                onContextMenu={(event, n) => {
-                  event.preventDefault();
-                  setContextMenu({ x: event.clientX, y: event.clientY, node: n });
-                }}
+                onSelect={handleNodeSelect}
+                onContextMenu={handleNodeContextMenu}
                 metrics={podMetrics}
               />
               );

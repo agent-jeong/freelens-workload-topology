@@ -2291,11 +2291,12 @@ export const topologyStyles = `
   display: grid;
   grid-template-columns: 282px 58px 230px minmax(0, 1fr);
   gap: 8px;
-  align-items: start;
-  min-height: 24px;
-  padding: 3px 10px;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
   white-space: pre;
   word-break: normal;
+  overflow: hidden;
 }
 
 .PodLogsModal__excludeButton {
