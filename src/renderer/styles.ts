@@ -281,6 +281,69 @@ export const topologyStyles = `
   color: var(--colorError);
 }
 
+.WorkloadTopology__metricsHint {
+  position: relative;
+  margin: 8px 18px 0;
+  padding: 10px 32px 10px 12px;
+  border-radius: 6px;
+  background: rgba(217, 155, 32, 0.1);
+  border: 1px solid rgba(217, 155, 32, 0.3);
+  color: var(--textColorPrimary);
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.WorkloadTopology__metricsHint code {
+  font-family: var(--font-monospace, monospace);
+  font-size: 11px;
+  background: rgba(0,0,0,0.2);
+  padding: 2px 5px;
+  border-radius: 3px;
+}
+
+.WorkloadTopology__metricsSubHint {
+  font-size: 11px;
+  color: var(--textColorSecondary);
+  margin-top: 2px;
+}
+
+.WorkloadTopology__metricsCmd {
+  display: block;
+  width: 100%;
+  padding: 6px 10px !important;
+  background: rgba(0,0,0,0.3) !important;
+  border-radius: 4px !important;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 0.15s;
+}
+
+.WorkloadTopology__metricsCmd:hover {
+  background: rgba(0,0,0,0.45) !important;
+}
+
+.WorkloadTopology__metricsHintClose {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: none;
+  border: none;
+  color: var(--textColorSecondary);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+  opacity: 0.7;
+  line-height: 1;
+}
+
+.WorkloadTopology__metricsHintClose:hover {
+  opacity: 1;
+}
+
 .IssuePanel {
   margin: 10px 18px 0;
 }
@@ -746,6 +809,15 @@ export const topologyStyles = `
   font-weight: 700;
   text-overflow: ellipsis;
   text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.TopologyCard__age {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--textColorSecondary);
+  opacity: 0.7;
+  font-weight: 400;
   white-space: nowrap;
 }
 
@@ -2393,6 +2465,74 @@ export const topologyStyles = `
 .TopologyContextMenu__separator {
   height: 1px;
   margin: 4px 10px;
+  background: var(--borderColor);
+}
+
+.HelpOverlay__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.HelpOverlay {
+  background: var(--mainBackground);
+  border: 1px solid var(--borderColor);
+  border-radius: 10px;
+  padding: 24px 32px;
+  min-width: 340px;
+  max-width: 420px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+}
+
+.HelpOverlay h3 {
+  margin: 0 0 16px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--textColorPrimary);
+}
+
+.HelpOverlay__grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 16px;
+  align-items: center;
+}
+
+.HelpOverlay__grid kbd {
+  display: inline-block;
+  padding: 2px 8px;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid var(--borderColor);
+  border-radius: 4px;
+  font-family: var(--font-monospace, monospace);
+  font-size: 11px;
+  color: var(--textColorPrimary);
+  min-width: 28px;
+  text-align: center;
+}
+
+.HelpOverlay__grid span {
+  font-size: 12px;
+  color: var(--textColorSecondary);
+}
+
+.HelpOverlay__close {
+  display: block;
+  margin: 20px auto 0;
+  padding: 6px 20px;
+  background: var(--contentColor);
+  border: 1px solid var(--borderColor);
+  border-radius: 4px;
+  color: var(--textColorPrimary);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.HelpOverlay__close:hover {
   background: var(--borderColor);
 }
 

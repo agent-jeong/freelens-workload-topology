@@ -2230,6 +2230,20 @@ function TopologyContextMenu({
   );
 }
 
+function formatAge(timestamp: string): string {
+  const ms = Date.now() - new Date(timestamp).getTime();
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d`;
+  const months = Math.floor(days / 30);
+  return `${months}mo`;
+}
+
 function parseCpu(value: string): number {
   if (value.endsWith("m")) return Number(value.slice(0, -1));
   if (value.endsWith("n")) return Number(value.slice(0, -1)) / 1e6;
@@ -2501,6 +2515,9 @@ function TopologyCard({
           <ResourceIcon kind={node.kind} />
         </span>
         <span className="TopologyCard__kind">{node.kind}</span>
+        {node.object?.metadata?.creationTimestamp ? (
+          <span className="TopologyCard__age">{formatAge(node.object.metadata.creationTimestamp)}</span>
+        ) : null}
       </div>
       <div className="TopologyCard__name" title={node.name}>{node.name}</div>
       <div className="TopologyCard__meta" title={extraInfoTitle}>
@@ -3441,7 +3458,9 @@ type PodMetrics = {
   memory: number;
 };
 
-async function fetchPodMetrics(namespace: string): Promise<PodMetrics[]> {
+type MetricsResult = { ok: true; data: PodMetrics[] } | { ok: false; reason: string };
+
+async function fetchPodMetrics(namespace: string): Promise<MetricsResult> {
   try {
     const api = K8sApi.podsApi as any;
     const path = `/apis/metrics.k8s.io/v1beta1/namespaces/${namespace}/pods`;
@@ -3452,16 +3471,25 @@ async function fetchPodMetrics(namespace: string): Promise<PodMetrics[]> {
     const url = `${apiBase}${path}`;
 
     const r = await fetch(url);
-    if (!r.ok) return [];
+    if (!r.ok) {
+      if (r.status === 404 || r.status === 503) return { ok: false, reason: "not-installed" };
+      if (r.status === 403) return { ok: false, reason: "forbidden" };
+      return { ok: false, reason: `http-${r.status}` };
+    }
     const response = await r.json();
 
-    if (!response) return [];
+    if (!response) return { ok: false, reason: "empty-response" };
 
     const items = response?.items ?? [];
 
-    if (!Array.isArray(items)) return [];
+    if (!Array.isArray(items)) return { ok: false, reason: "invalid-response" };
 
-    return items.map((item: any) => {
+    // metrics-server installed but returning errors (e.g. kubelet TLS issue)
+    if (items.length === 0) {
+      return { ok: true, data: [] };
+    }
+
+    const data = items.map((item: any) => {
       const containers = item.containers ?? [];
       let cpu = 0;
       let mem = 0;
@@ -3478,9 +3506,10 @@ async function fetchPodMetrics(namespace: string): Promise<PodMetrics[]> {
         memory: mem,
       };
     });
-  } catch (e) {
-    console.error("[metrics] top-level error:", e);
-    return [];
+
+    return { ok: true, data };
+  } catch {
+    return { ok: false, reason: "network-error" };
   }
 }
 
@@ -3952,43 +3981,53 @@ function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: () => vo
     };
   }, [node.id, tailLines, live, previous]);
 
+  const [debouncedQuery, setDebouncedQuery] = useState(query);
+
+  useEffect(() => {
+    if (!query.trim()) { setDebouncedQuery(""); return; }
+    const timer = setTimeout(() => setDebouncedQuery(query), 200);
+    return () => clearTimeout(timer);
+  }, [query]);
+
   const allLines = useMemo(() => logLines(entries), [entries]);
   const podOptions = useMemo(() => [...new Set(allLines.map((line) => line.podName))].sort(), [allLines]);
   const containerOptions = useMemo(() => [...new Set(allLines.map((line) => line.containerName))].sort(), [allLines]);
-  const filteredLines = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
 
-    let lines = allLines;
+  // Pre-compute lowercase cache for search performance
+  const searchableLines = useMemo(() => allLines.map((line) => ({
+    line,
+    lower: `${line.message}\t${line.podName}\t${line.containerName}\t${line.timestamp ?? ""}`.toLowerCase(),
+  })), [allLines]);
+
+  const filteredLines = useMemo(() => {
+    const normalizedQuery = debouncedQuery.trim().toLowerCase();
+
+    let lines = searchableLines;
 
     if (excludedMessages.size > 0) {
-      lines = lines.filter((line) => !excludedMessages.has(logMessageKey(line)));
+      lines = lines.filter(({ line }) => !excludedMessages.has(logMessageKey(line)));
     }
 
     if (selectedPods.length > 0) {
-      lines = lines.filter((line) => selectedPods.includes(line.podName));
+      lines = lines.filter(({ line }) => selectedPods.includes(line.podName));
     }
 
     if (selectedContainer !== "all") {
-      lines = lines.filter((line) => line.containerName === selectedContainer);
+      lines = lines.filter(({ line }) => line.containerName === selectedContainer);
     }
 
     if (errorsOnly) {
-      lines = lines.filter((line) => line.severity === "error" || line.severity === "warning");
+      lines = lines.filter(({ line }) => line.severity === "error" || line.severity === "warning");
     }
 
-    if (!normalizedQuery) {
-      return lines;
+    if (normalizedQuery) {
+      lines = lines.filter(({ lower }) => lower.includes(normalizedQuery));
     }
 
-    return lines.filter((line) =>
-      line.message.toLowerCase().includes(normalizedQuery)
-      || line.podName.toLowerCase().includes(normalizedQuery)
-      || line.containerName.toLowerCase().includes(normalizedQuery)
-      || line.timestamp?.toLowerCase().includes(normalizedQuery)
-    );
-  }, [allLines, query, selectedPods, selectedContainer, errorsOnly, excludedMessages]);
-  const matchCount = query.trim() ? filteredLines.length : 0;
-  const selectedMatchText = matchCount > 0 ? `${selectedMatchIndex + 1} / ${matchCount}` : query.trim() ? "0 / 0" : `${filteredLines.length} lines`;
+    return lines.map(({ line }) => line);
+  }, [searchableLines, debouncedQuery, selectedPods, selectedContainer, errorsOnly, excludedMessages]);
+  const matchCount = debouncedQuery.trim() ? filteredLines.length : 0;
+  const selectedMatchText = matchCount > 0 ? `${selectedMatchIndex + 1} / ${matchCount}` : debouncedQuery.trim() ? "0 / 0" : `${filteredLines.length} lines`;
   const podFilterLabel = selectedPods.length === 0 ? "All pods" : selectedPods.length === 1 ? selectedPods[0] : `${selectedPods.length} pods`;
   const hiddenMessages = useMemo(() => [...excludedMessages].sort(), [excludedMessages]);
 
@@ -4242,6 +4281,7 @@ function WorkloadTopologyPage() {
   const [cronJobWindowHours, setCronJobWindowHours] = useState(24);
   const [isLive, setIsLive] = useState(false);
   const [showGrid, setShowGrid] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
   const [logModalNode, setLogModalNode] = useState<TopologyNode | null>(null);
@@ -4260,6 +4300,7 @@ function WorkloadTopologyPage() {
   const liveRefreshInFlight = useRef(false);
   const prevNodeStatuses = useRef<Map<string, TopologyStatus>>(new Map());
   const [podMetrics, setPodMetrics] = useState<Map<string, PodMetrics>>(new Map());
+  const [metricsHint, setMetricsHint] = useState<string | null>(null);
   const [statusToasts, setStatusToasts] = useState<Array<{ id: number; name: string; kind: string; from: TopologyStatus; to: TopologyStatus }>>([]);
   const toastCounter = useRef(0);
   const [canvasSize, setCanvasSize] = useState<ViewportSize>({ width: 1, height: 1 });
@@ -4325,10 +4366,17 @@ function WorkloadTopologyPage() {
     let cancelled = false;
 
     async function loadMetrics() {
-      const metrics = await fetchPodMetrics(selectedNamespace);
+      const result = await fetchPodMetrics(selectedNamespace);
 
-      if (!cancelled && metrics.length > 0) {
-        setPodMetrics(new Map(metrics.map((m) => [m.podName, m])));
+      if (cancelled) return;
+
+      if (result.ok) {
+        if (result.data.length > 0) {
+          setPodMetrics(new Map(result.data.map((m) => [m.podName, m])));
+        }
+        setMetricsHint(null);
+      } else {
+        setMetricsHint(result.reason);
       }
     }
 
@@ -4490,6 +4538,8 @@ function WorkloadTopologyPage() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      const inInput = !!(event.target as HTMLElement)?.closest("input, textarea, select");
+
       if ((event.metaKey || event.ctrlKey) && event.key === "k") {
         event.preventDefault();
         searchInputRef.current?.focus();
@@ -4497,26 +4547,44 @@ function WorkloadTopologyPage() {
       }
 
       if (event.key === "Escape") {
-        if (searchQuery) {
-          setSearchQuery("");
-          searchInputRef.current?.blur();
-          return;
-        }
-
-        if (logModalNode) {
-          setLogModalNode(null);
-          return;
-        }
-
+        if (showHelp) { setShowHelp(false); return; }
+        if (searchQuery) { setSearchQuery(""); searchInputRef.current?.blur(); return; }
+        if (logModalNode) { setLogModalNode(null); return; }
         setSelectedNodeId(null);
         setSelectedNodeIds(new Set());
+        return;
+      }
+
+      if (inInput) return;
+
+      switch (event.key) {
+        case "?": setShowHelp((v) => !v); break;
+        case "g": setShowGrid((v) => !v); break;
+        case "l": setIsLive((v) => !v); break;
+        case "r": void loadResources(); break;
+        case "p": setShowIssuesOnly((v) => !v); break;
+        case "Backspace":
+        case "Delete":
+          if (selectedNodeId || selectedNodeIds.size > 0) {
+            setManualPositions((prev) => {
+              const next = { ...prev };
+              if (selectedNodeId) delete next[selectedNodeId];
+              selectedNodeIds.forEach((id) => delete next[id]);
+              return next;
+            });
+          }
+          break;
+        case "0": setScale(1); setOffset({ x: 0, y: 0 }); break;
+        case "-": setScale((s) => Math.max(0.3, s - 0.1)); break;
+        case "=":
+        case "+": setScale((s) => Math.min(3, s + 0.1)); break;
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
 
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [logModalNode, searchQuery]);
+  }, [logModalNode, searchQuery, showHelp, selectedNodeId, selectedNodeIds]);
 
   useEffect(() => {
     setManualPositions((current) => {
@@ -4862,6 +4930,45 @@ function WorkloadTopologyPage() {
       </div>
 
       {error ? <div className="WorkloadTopology__error">{error}</div> : null}
+      {metricsHint ? (
+        <div className="WorkloadTopology__metricsHint">
+          <button type="button" className="WorkloadTopology__metricsHintClose" onClick={() => setMetricsHint(null)} aria-label="Dismiss">&times;</button>
+          {metricsHint === "not-installed" ? (
+            <>
+              <span>⚠ Metrics server not installed. Install and configure with:</span>
+              <code
+                className="WorkloadTopology__metricsCmd"
+                title="Click to copy install command"
+                onClick={() => void copyText("kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml")}
+              >
+                kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+              </code>
+              <span className="WorkloadTopology__metricsSubHint">For self-signed cert clusters, also run:</span>
+              <code
+                className="WorkloadTopology__metricsCmd"
+                title="Click to copy patch command"
+                onClick={() => void copyText("kubectl patch deployment metrics-server -n kube-system --type='json' -p='[{\"op\": \"add\", \"path\": \"/spec/template/spec/containers/0/args/-\", \"value\": \"--kubelet-insecure-tls\"}]'")}
+              >
+                kubectl patch deployment metrics-server -n kube-system --type=&apos;json&apos; -p=&apos;[&#123;&quot;op&quot;:&quot;add&quot;,&quot;path&quot;:&quot;/spec/template/spec/containers/0/args/-&quot;,&quot;value&quot;:&quot;--kubelet-insecure-tls&quot;&#125;]&apos;
+              </code>
+            </>
+          ) : metricsHint === "forbidden" ? (
+            <span>⚠ Metrics API access denied. Check your cluster RBAC permissions for <code>metrics.k8s.io</code> resources.</span>
+          ) : (
+            <>
+              <span>⚠ Metrics unavailable ({metricsHint})</span>
+              <span className="WorkloadTopology__metricsSubHint">If using self-signed certs, add <code>--kubelet-insecure-tls</code> to metrics-server:</span>
+              <code
+                className="WorkloadTopology__metricsCmd"
+                title="Click to copy"
+                onClick={() => void copyText("kubectl patch deployment metrics-server -n kube-system --type='json' -p='[{\"op\": \"add\", \"path\": \"/spec/template/spec/containers/0/args/-\", \"value\": \"--kubelet-insecure-tls\"}]'")}
+              >
+                kubectl patch deployment metrics-server -n kube-system --type=&apos;json&apos; -p=&apos;[&#123;&quot;op&quot;:&quot;add&quot;,&quot;path&quot;:&quot;/spec/template/spec/containers/0/args/-&quot;,&quot;value&quot;:&quot;--kubelet-insecure-tls&quot;&#125;]&apos;
+              </code>
+            </>
+          )}
+        </div>
+      ) : null}
       {loading ? <div className="WorkloadTopology__state">Loading topology...</div> : null}
       {!loading && resourceCount === 0 ? <div className="WorkloadTopology__state">No supported Kubernetes resources found.</div> : null}
       {!loading && issueNodes.length > 0 ? <IssuePanel nodes={issueNodes} onSelect={focusNode} /> : null}
@@ -5113,6 +5220,29 @@ function WorkloadTopologyPage() {
         ) : null}
       </div>
       {logModalNode ? <PodLogsModal node={logModalNode} onClose={() => setLogModalNode(null)} /> : null}
+      {showHelp ? (
+        <div className="HelpOverlay__backdrop" onMouseDown={() => setShowHelp(false)}>
+          <div className="HelpOverlay" onMouseDown={(e) => e.stopPropagation()}>
+            <h3>Keyboard Shortcuts</h3>
+            <div className="HelpOverlay__grid">
+              <kbd>⌘K</kbd><span>Search resources</span>
+              <kbd>?</kbd><span>Toggle this help</span>
+              <kbd>G</kbd><span>Toggle grid</span>
+              <kbd>L</kbd><span>Toggle Live mode</span>
+              <kbd>R</kbd><span>Refresh resources</span>
+              <kbd>P</kbd><span>Toggle Problems Only</span>
+              <kbd>−</kbd><span>Zoom out</span>
+              <kbd>+</kbd><span>Zoom in</span>
+              <kbd>0</kbd><span>Reset zoom &amp; position</span>
+              <kbd>Delete</kbd><span>Reset selected node position</span>
+              <kbd>Esc</kbd><span>Close / Deselect</span>
+              <kbd>Shift+Drag</kbd><span>Multi-select (marquee)</span>
+              <kbd>Right-click</kbd><span>Context menu</span>
+            </div>
+            <button type="button" className="HelpOverlay__close" onClick={() => setShowHelp(false)}>Close</button>
+          </div>
+        </div>
+      ) : null}
       {contextMenu ? (
         <TopologyContextMenu
           x={contextMenu.x}
