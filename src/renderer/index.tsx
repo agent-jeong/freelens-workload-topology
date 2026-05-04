@@ -4637,7 +4637,7 @@ function WorkloadTopologyPage() {
         case "?": setShowHelp((v) => !v); break;
         case "g": setShowGrid((v) => !v); break;
         case "l": setIsLive((v) => !v); break;
-        case "r": void loadResources(); break;
+        case ".": void loadResources(); break;
         case "p": setShowIssuesOnly((v) => !v); break;
         case "Backspace":
         case "Delete":
@@ -5013,17 +5013,17 @@ function WorkloadTopologyPage() {
             Live
           </button>
           
-          {Object.keys(manualPositions).length > 0 && (
-            <button type="button" onClick={() => setManualPositions({})}>Reset layout</button>
-          )}
-          <button 
-            type="button" 
-            onClick={() => void loadResources()} 
-            title="Refresh"
+          <button
+            type="button"
+            onClick={() => void loadResources()}
+            title="Refresh (.)"
             style={{ fontWeight: 600, fontSize: "16px", padding: "0 8px" }}
           >
             ↻
           </button>
+          {Object.keys(manualPositions).length > 0 && (
+            <button type="button" onClick={() => setManualPositions({})}>Reset layout</button>
+          )}
         </div>
       </div>
 
@@ -5290,12 +5290,12 @@ function WorkloadTopologyPage() {
           <div className="HelpOverlay" onMouseDown={(e) => e.stopPropagation()}>
             <h3>Keyboard Shortcuts</h3>
             <div className="HelpOverlay__grid">
-              <kbd>⌘K</kbd><span>Search resources</span>
               <kbd>?</kbd><span>Toggle this help</span>
-              <kbd>G</kbd><span>Toggle grid</span>
-              <kbd>L</kbd><span>Toggle Live mode</span>
-              <kbd>R</kbd><span>Refresh resources</span>
-              <kbd>P</kbd><span>Toggle Problems Only</span>
+              <kbd>⌘K</kbd><span>Search resources</span>
+              <kbd>⌘P</kbd><span>Toggle Problems Only filter</span>
+              <kbd>⌘L</kbd><span>Toggle Live mode (auto-refresh)</span>
+              <kbd>⌘.</kbd><span>Refresh resources</span>
+              <kbd>⌘G</kbd><span>Toggle grid background</span>
               <kbd>−</kbd><span>Zoom out</span>
               <kbd>+</kbd><span>Zoom in</span>
               <kbd>0</kbd><span>Reset zoom &amp; position</span>
