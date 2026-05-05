@@ -1,83 +1,173 @@
 # Freelens Workload Topology
 
-Freelens에서 Kubernetes 워크로드와 관련 리소스의 관계를 토폴로지로 보여주는 확장 프로그램입니다. 클러스터 페이지 메뉴에 **Workload Topology** 항목을 추가하고, 현재 선택한 클러스터의 리소스를 조회해 연결 관계, 상태, 상세 JSON/YAML, Pod 로그를 한 화면에서 확인할 수 있게 합니다.
+[![License](https://img.shields.io/github/license/agent-jeong/freelens-workload-topology)](LICENSE)
 
-## 주요 기능
+[한국어](README.ko.md)
 
-- Ingress, Service, Deployment, Pod, CronJob, Job, ConfigMap, Secret 관계 시각화
-- Ingress backend, Service selector, Deployment selector, OwnerReference, Pod의 ConfigMap/Secret 참조를 기반으로 Edge 자동 연결
-- 리소스 상태를 `healthy`, `warning`, `danger`, `unknown`으로 표시
-- 네임스페이스 필터와 CronJob/Job 표시 기간 선택(1h, 24h, 7d)
-- Problems Only 필터로 warning/danger 리소스와 연결된 관계만 표시
-- 문제 리소스 빠른 이동 패널로 warning/danger 리소스 즉시 선택 및 화면 중앙 이동
-- 카드와 상세 패널에서 리소스별 문제 원인 요약 표시
-- Kubernetes Event reason 기반 원인 힌트 표시
-- Live 모드에서 4초 주기로 리소스 자동 새로고침
-- Canvas pan/zoom, 미니맵, Grid 토글, 노드 드래그 및 네임스페이스별 레이아웃 저장
-- Shift 드래그로 여러 노드 선택 및 선택된 관계 하이라이트
-- 선택 리소스의 상세 정보, 관련 Kubernetes Events, JSON 트리 검색, 주요 필드 설명, JSON/YAML 복사
-- 선택 리소스의 문제 요약, 이벤트, 마스킹된 YAML 컨텍스트로 AI 분석 프롬프트 복사
-- YAML 편집, 변경 diff, 적용 전 경고, Kubernetes API update 호출
-- Pod 또는 Pod 그룹의 로그 조회, Live tail, previous logs, Pod/Container 필터, severity 필터, 검색, 줄바꿈, 동일 메시지 숨김 및 개별 해제
+A Kubernetes topology extension for [FreeLens](https://github.com/freelensapp/freelens). It adds a **Workload Topology** page to the cluster view, visualizing resource relationships, real-time status, metrics, and pod logs in a single interactive graph.
 
-## 지원 리소스
+Instead of jumping between Ingress, Service, Deployment, Pod, ConfigMap, and Secret detail screens, Workload Topology renders all connections as a navigable graph you can inspect at a glance.
 
-현재 렌더러는 다음 Freelens Kubernetes API를 조회합니다.
+## Preview
 
-- Namespace
-- Ingress
-- Service
-- Deployment
-- CronJob
-- Job
-- Pod
-- ConfigMap
-- Secret
-- Event
+![Workload Topology screenshot](docs/assets/screenshot.png)
 
-CronJob과 Job은 일반 워크로드 영역 아래의 **Scheduled Jobs** 영역에 별도로 배치됩니다. 다수 Pod나 Job은 그룹 카드로 묶이며, 그룹 카드는 조회와 로그 열기는 가능하지만 YAML 적용은 개별 리소스에서만 가능합니다.
+<details>
+  <summary>View demo GIF</summary>
 
-## 요구 사항
+  ![Workload Topology demo](docs/assets/demo.gif)
+</details>
 
-- Node.js `>=22.16.0`
-- pnpm `10.33.2` (`packageManager` 기준)
-- Freelens `^1.6.0`
-- Kubernetes 리소스 조회/수정 권한
-- Pod 로그 기능 사용 시 Pod log 권한
+## Why Workload Topology
 
-## 개발
+Kubernetes relationships are spread across dozens of screens. This extension brings them together so you can answer questions like:
 
-```sh
+- Which Service is this Ingress routing to, and is the backend healthy?
+- Which Pods belong to this Deployment, and what is their CPU/memory usage?
+- Which ConfigMaps and Secrets does this workload reference?
+- What is the blast radius if this resource fails?
+- Why is this Pod in CrashLoopBackOff, and what do the events say?
+
+## Supported Apps
+
+| App | Version |
+|---|---|
+| FreeLens | 1.6.0+ |
+
+The extension uses the FreeLens renderer API and requires no extra sidecar or cluster agent.
+
+## Core Features
+
+### Topology Graph
+- Resource graph for **Ingress, Service, Deployment, CronJob, Job, Pod, ConfigMap, Secret**
+- Automatic edge detection via Ingress backends, Service selectors, Deployment selectors, OwnerReferences, and Pod volume/env references
+- Status indicators: `healthy`, `warning`, `danger`, `unknown`
+- Namespace-aware browsing with per-namespace layout persistence
+- CronJob/Job time-window filter (1h, 24h, 7d)
+- Group cards for Pods and Jobs with expand/collapse
+
+### Inspection & Debugging
+- **Detail panel** with resource summary, related Kubernetes Events, and JSON tree search
+- **YAML editor** with live diff, apply warnings, and direct Kubernetes API update
+- **Pod logs** with Live tail, previous logs, container filter, severity filter, keyword search, line wrap, duplicate hiding, and virtual scrolling
+- **AI analysis prompt** copy with auto-masked secrets (no external API calls)
+- **Blast radius** analysis to visualize the failure impact of a selected resource
+
+### Real-time Monitoring
+- **Live mode** with 4-second auto-refresh cycle and auto-scroll toggle
+- **Metrics-server integration** showing real-time CPU and memory usage per Pod
+- **Issue panel** with quick-jump to warning/danger resources and event-based cause hints
+- **Live notifications** for resource status changes
+
+### Navigation & Interaction
+- Canvas pan, zoom, minimap, and grid toggle
+- Drag nodes to rearrange; Shift+drag to multi-select
+- Edge hover highlighting and clickable resource cards
+- Right-click context menu for quick actions
+- Label-based filtering
+
+### Keyboard Shortcuts
+
+| Key | Action |
+|---|---|
+| `?` | Toggle keyboard shortcut help |
+| `⌘K` | Search resources |
+| `⌘G` | Toggle grid background |
+| `⌘L` | Toggle Live mode (auto-refresh) |
+| `⌘.` | Refresh resources |
+| `⌘P` | Toggle Problems Only filter |
+| `-` / `+` | Zoom out / Zoom in |
+| `0` | Reset zoom & position |
+| `Delete` | Reset selected node position |
+| `Esc` | Close / Deselect |
+| `Shift+Drag` | Multi-select (marquee) |
+| `Right-click` | Context menu |
+
+## Installation
+
+### Install from GitHub Releases
+
+1. Open the [latest release](https://github.com/agent-jeong/freelens-workload-topology/releases/latest).
+2. Download the `.tgz` asset.
+3. Open FreeLens and go to the **Extensions** screen.
+4. Install the downloaded `.tgz` file.
+
+### Build from Source
+
+```shell
 corepack pnpm install
-corepack pnpm type:check
-corepack pnpm build
-```
-
-빌드 결과물은 `out/main/index.js`와 `out/renderer/index.js`에 생성됩니다. `package.json`의 `main`, `renderer`, `files` 설정도 이 출력물을 기준으로 되어 있습니다.
-
-## 패키징 및 설치
-
-로컬에서 확장 패키지를 만들려면 빌드 후 pnpm pack을 실행합니다.
-
-```sh
 corepack pnpm build
 corepack pnpm pack
 ```
 
-생성된 `freelens-workload-topology-<version>.tgz` 파일을 Freelens 확장 프로그램 설치 화면에서 불러와 설치합니다. 현재 패키지 버전은 `1.0.0`입니다.
+Then install the generated `freelens-workload-topology-1.0.0.tgz` from the Extensions screen.
 
-## 프로젝트 구조
+## Usage
 
-- `src/main/index.ts`: Freelens main extension 진입점과 activate/deactivate 로그
-- `src/renderer/index.tsx`: Workload Topology 페이지, Kubernetes 리소스 조회, 토폴로지 생성, 상세 패널, YAML 적용, Pod 로그 모달
-- `src/renderer/styles.ts`: 확장 UI 스타일
-- `electron.vite.config.ts`: main/renderer 빌드 설정과 Freelens/React external 처리
-- `package.json`: 확장 메타데이터, 엔진 요구 사항, 빌드/타입체크 스크립트
+1. Open a cluster in FreeLens.
+2. Open **Workload Topology** from the cluster page menu.
+3. Select a namespace.
+4. Explore the topology graph — hover edges, click cards, drag nodes.
+5. Use the detail panel to inspect YAML, events, and logs.
+6. Press `?` to view all keyboard shortcuts.
 
-## 동작 참고
+## Metrics Server
 
-- YAML 적용은 `status`와 `metadata.managedFields`를 제거한 객체를 기준으로 편집하며, `kind`, `metadata.name`, `metadata.namespace`, Pod의 immutable 필드 변경은 Kubernetes API에서 거부될 수 있습니다.
-- AI 분석 프롬프트 복사는 외부 API를 호출하지 않습니다. Secret data, env value, token/password/key 계열 필드, annotation 값은 마스킹됩니다.
-- Secret JSON 상세 화면에서는 `data` 하위 값이 마스킹됩니다.
-- Pod 로그 모달은 최대 24개 로그 스트림을 먼저 표시합니다.
-- Event API가 없거나 권한이 없으면 이벤트 패널은 빈 상태로 표시되고 토폴로지 조회는 계속 동작합니다.
+To display real-time CPU and memory usage on Pod tooltips, the cluster needs a running [metrics-server](https://github.com/kubernetes-sigs/metrics-server).
+
+```shell
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+```
+
+For local clusters (minikube, kind, etc.) that use self-signed certificates:
+
+```shell
+kubectl patch deployment metrics-server -n kube-system --type='json' -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
+```
+
+If metrics-server is not available, the topology continues to work normally without CPU/memory data.
+
+## Project Structure
+
+```
+src/
+  main/index.ts        # FreeLens main extension entry point
+  renderer/index.tsx   # Topology page, resource queries, detail panel, YAML editor, pod logs
+  renderer/styles.ts   # Extension UI styles
+electron.vite.config.ts  # Build configuration
+package.json             # Extension metadata and scripts
+```
+
+## Development
+
+```shell
+corepack pnpm install
+corepack pnpm build
+```
+
+| Command | Description |
+|---|---|
+| `pnpm build` | Production build |
+| `pnpm type:check` | TypeScript type checking |
+| `pnpm pack` | Create installable `.tgz` package |
+
+## Notes
+
+- YAML apply removes `status` and `metadata.managedFields` before editing. Changes to `kind`, `metadata.name`, `metadata.namespace`, and Pod immutable fields will be rejected by the Kubernetes API.
+- AI analysis prompt copy does not call any external API. Secret data, env values, and token/password/key fields are automatically masked.
+- Pod log modal displays up to 24 log streams at once.
+- If the Event API is unavailable, the event panel shows empty and topology loading continues normally.
+
+## Contributing
+
+Issues and pull requests are welcome.
+
+When reporting bugs, please include:
+
+- FreeLens version
+- Kubernetes cluster version and provider
+- Screenshot or short GIF when possible
+
+## License
+
+MIT

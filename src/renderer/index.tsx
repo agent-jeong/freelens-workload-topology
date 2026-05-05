@@ -977,18 +977,28 @@ function connectedNodeIds(selectedNodeId: string | null, edges: TopologyEdge[]):
     return new Set();
   }
 
+  const adj = new Map<string, string[]>();
+
+  for (const edge of edges) {
+    let list = adj.get(edge.from);
+    if (!list) { list = []; adj.set(edge.from, list); }
+    list.push(edge.to);
+
+    let list2 = adj.get(edge.to);
+    if (!list2) { list2 = []; adj.set(edge.to, list2); }
+    list2.push(edge.from);
+  }
+
   const connected = new Set([selectedNodeId]);
   const queue = [selectedNodeId];
 
   while (queue.length > 0) {
-    const current = queue.shift();
+    const current = queue.pop()!;
 
-    for (const edge of edges) {
-      const next = edge.from === current ? edge.to : edge.to === current ? edge.from : undefined;
-
-      if (next && !connected.has(next)) {
-        connected.add(next);
-        queue.push(next);
+    for (const neighbor of adj.get(current) ?? []) {
+      if (!connected.has(neighbor)) {
+        connected.add(neighbor);
+        queue.push(neighbor);
       }
     }
   }
@@ -2371,6 +2381,8 @@ function buildTooltipRows(node: TopologyNode, metricsMap: Map<string, PodMetrics
 
 const TopologyCard = React.memo(function TopologyCard({
   node,
+  posX,
+  posY,
   selected,
   onDragStart,
   relation,
@@ -2380,6 +2392,8 @@ const TopologyCard = React.memo(function TopologyCard({
   metrics
 }: {
   node: TopologyNode;
+  posX: number;
+  posY: number;
   selected: boolean;
   onDragStart: (event: React.MouseEvent, node: TopologyNode) => void;
   relation: "normal" | "connected" | "dimmed";
@@ -2505,7 +2519,7 @@ const TopologyCard = React.memo(function TopologyCard({
     <button
       type="button"
       className={`TopologyCard kind-${node.kind} status-${node.status} relation-${relation}${selected ? " is-selected" : ""}${blastStatus ? ` blast-${blastStatus}` : ""}`}
-      style={{ left: node.x, top: node.y }}
+      style={{ left: posX, top: posY }}
       onClick={() => onSelect(node.id)}
       onMouseDown={(event) => { handleMouseLeave(); onDragStart(event, node); }}
       onContextMenu={(event) => onContextMenu(event, node)}
@@ -2570,10 +2584,45 @@ const TopologyCard = React.memo(function TopologyCard({
   );
 });
 
+const TopologyEdges = React.memo(function TopologyEdges({
+  edgePaths,
+  showIssuesOnly,
+  issueNodeIds,
+  edgeRelationFn,
+  canvasWidth,
+  canvasHeight,
+}: {
+  edgePaths: Array<{ id: string; from: string; to: string; d: string }>;
+  showIssuesOnly: boolean;
+  issueNodeIds: Set<string>;
+  edgeRelationFn: (fromId: string, toId: string) => string | undefined;
+  canvasWidth: number;
+  canvasHeight: number;
+}) {
+  return (
+    <svg className="TopologyCanvas__edges" width={canvasWidth} height={canvasHeight}>
+      {edgePaths.map((edge) => {
+        if (showIssuesOnly && (!issueNodeIds.has(edge.from) || !issueNodeIds.has(edge.to))) {
+          return null;
+        }
+
+        return (
+          <path
+            key={edge.id}
+            className={edgeRelationFn(edge.from, edge.to)}
+            d={edge.d}
+          />
+        );
+      })}
+    </svg>
+  );
+});
+
 function TopologyMinimap({
   canvasHeight,
   canvasSize,
   nodes,
+  positions,
   offset,
   scale,
   onNavigate
@@ -2581,6 +2630,7 @@ function TopologyMinimap({
   canvasHeight: number;
   canvasSize: ViewportSize;
   nodes: TopologyNode[];
+  positions: Map<string, { x: number; y: number }>;
   offset: { x: number; y: number };
   scale: number;
   onNavigate: (x: number, y: number) => void;
@@ -2655,17 +2705,22 @@ function TopologyMinimap({
     >
       <svg width={minimapWidth} height={minimapHeight}>
         <g transform={`translate(${mapOffsetX}, ${mapOffsetY})`}>
-          {nodes.map((node) => (
-            <rect
-              key={node.id}
-              className={`status-${node.status}`}
-              x={node.x * mapScale}
-              y={node.y * mapScale}
-              width={cardWidth * mapScale}
-              height={cardHeight * mapScale}
-              rx="2"
-            />
-          ))}
+          {nodes.map((node) => {
+            const pos = positions.get(node.id);
+            const nx = pos ? pos.x : node.x;
+            const ny = pos ? pos.y : node.y;
+            return (
+              <rect
+                key={node.id}
+                className={`status-${node.status}`}
+                x={nx * mapScale}
+                y={ny * mapScale}
+                width={cardWidth * mapScale}
+                height={cardHeight * mapScale}
+                rx="2"
+              />
+            );
+          })}
         </g>
       </svg>
       <div
@@ -3214,15 +3269,15 @@ function TopologyDetails({
   }
 
   const activeNode = node;
-  const json = stringifyObject(activeNode.object);
-  const jsonObject = objectForCopy(activeNode.object);
-  const yaml = stringifyYaml(activeNode.object);
-  const diff = yamlDiff(yaml, yamlText);
-  const warnings = yamlWarnings(activeNode, yamlText);
+  const json = useMemo(() => stringifyObject(activeNode.object), [activeNode.id]);
+  const jsonObject = useMemo(() => objectForCopy(activeNode.object), [activeNode.id]);
+  const yaml = useMemo(() => stringifyYaml(activeNode.object), [activeNode.id]);
+  const diff = useMemo(() => yamlDiff(yaml, yamlText), [yaml, yamlText]);
+  const warnings = useMemo(() => yamlWarnings(activeNode, yamlText), [activeNode.id, yamlText]);
   const yamlChanged = yamlText !== yaml;
   const apiVersion = (jsonObject as any)?.apiVersion;
-  const jsonMeanings = jsonMeaningRows(activeNode.kind, jsonObject);
-  const causeHints = causeHintsForEvents(events);
+  const jsonMeanings = useMemo(() => jsonMeaningRows(activeNode.kind, jsonObject), [activeNode.id]);
+  const causeHints = useMemo(() => causeHintsForEvents(events), [events]);
   const detailRows: React.ReactNode[] = [
     <DetailRow key="name" label="Name" value={node.name} onCopy={() => onCopy("name", node.name)} />,
     <DetailRow key="namespace" label="Namespace" value={node.namespace} onCopy={() => onCopy("namespace", node.namespace)} />
@@ -3572,26 +3627,33 @@ function podLogTargets(node: TopologyNode): Array<{ pod: KubeObjectLike; contain
   return pods.flatMap((pod) => podContainers(pod).map((containerName) => ({ pod, containerName })));
 }
 
-async function fetchPodLogEntry(pod: KubeObjectLike, containerName: string, options: PodLogOptions): Promise<PodLogEntry> {
+async function fetchPodLogEntry(pod: KubeObjectLike, containerName: string, options: PodLogOptions & { sinceTime?: string }): Promise<PodLogEntry> {
   const podName = getName(pod);
   const namespace = getNamespace(pod);
 
   try {
+    const queryOptions: any = {
+      container: containerName === "default" ? undefined : containerName,
+      timestamps: true,
+      previous: options.previous
+    };
+
+    if (options.sinceTime) {
+      queryOptions.sinceTime = options.sinceTime;
+    } else {
+      queryOptions.tailLines = options.tailLines;
+    }
+
     const text = await (K8sApi.podsApi as any).getLogs(
       { name: podName, namespace },
-      {
-        container: containerName === "default" ? undefined : containerName,
-        tailLines: options.tailLines,
-        timestamps: true,
-        previous: options.previous
-      }
+      queryOptions
     );
 
     return {
       podName,
       namespace,
       containerName,
-      text: text || "No recent logs."
+      text: text || (options.sinceTime ? "" : "No recent logs.")
     };
   } catch (error) {
     return {
@@ -4026,12 +4088,15 @@ function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: () => vo
   const logBodyRef = useRef<HTMLDivElement | null>(null);
   const lineRefs = useRef<Array<HTMLDivElement | null>>([]);
 
+  const lastTimestampRef = useRef<string | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     const targets = podLogTargets(node);
     const visibleTargets = targets.slice(0, 24);
 
     setLimitMessage(targets.length > visibleTargets.length ? `Showing first ${visibleTargets.length} of ${targets.length} log streams.` : null);
+    lastTimestampRef.current = null;
 
     async function loadLogs(showLoading: boolean) {
       if (showLoading) {
@@ -4044,13 +4109,69 @@ function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: () => vo
       if (!cancelled) {
         setEntries(loadedEntries);
         setLoading(false);
+
+        // Track latest timestamp for incremental fetches
+        let latest = "";
+        for (const entry of loadedEntries) {
+          for (const line of entry.text.split("\n")) {
+            const ts = line.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[^\s]*)\s/)?.[1];
+            if (ts && ts > latest) latest = ts;
+          }
+        }
+        if (latest) lastTimestampRef.current = latest;
       }
+    }
+
+    async function loadIncremental() {
+      const sinceTime = lastTimestampRef.current;
+      if (!sinceTime) {
+        // Fallback to full load if no timestamp yet
+        await loadLogs(false);
+        return;
+      }
+
+      const newEntries = await Promise.all(visibleTargets.map(({ pod, containerName }) => fetchPodLogEntry(pod, containerName, { tailLines, previous, sinceTime })));
+
+      if (cancelled) return;
+
+      // Track latest timestamp
+      let latest = sinceTime;
+      for (const entry of newEntries) {
+        for (const line of entry.text.split("\n")) {
+          const ts = line.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[^\s]*)\s/)?.[1];
+          if (ts && ts > latest) latest = ts;
+        }
+      }
+      if (latest > sinceTime) lastTimestampRef.current = latest;
+
+      // Check if there are actual new lines (sinceTime is inclusive, so filter duplicates)
+      const hasNewData = newEntries.some((e) => e.text.trim().length > 0);
+      if (!hasNewData) return;
+
+      setEntries((prev) => {
+        return prev.map((existing, i) => {
+          const newEntry = newEntries[i];
+          if (!newEntry || !newEntry.text.trim()) return existing;
+
+          // Append new lines, deduplicating by filtering lines <= sinceTime
+          const existingLines = existing.text.split("\n");
+          const lastExistingLine = existingLines[existingLines.length - 1] || existingLines[existingLines.length - 2] || "";
+          const newLines = newEntry.text.split("\n").filter((line) => line.trim() && line > lastExistingLine);
+
+          if (newLines.length === 0) return existing;
+
+          return {
+            ...existing,
+            text: existing.text + "\n" + newLines.join("\n")
+          };
+        });
+      });
     }
 
     void loadLogs(true);
 
     if (live && !previous) {
-      const interval = window.setInterval(() => void loadLogs(false), 3000);
+      const interval = window.setInterval(() => void loadIncremental(), 3000);
 
       return () => {
         cancelled = true;
@@ -4450,19 +4571,23 @@ function WorkloadTopologyPage() {
   }, [selectedNamespace, isLive]);
 
   const filteredResources = useMemo(() => filterByNamespace(resources, selectedNamespace), [resources, selectedNamespace]);
-  const baseTopology = useMemo(() => buildTopology(filteredResources, cronJobWindowHours), [filteredResources, cronJobWindowHours]);
-  const topology = useMemo(() => ({
-    edges: baseTopology.edges,
-    cronZoneY: baseTopology.cronZoneY,
-    nodes: baseTopology.nodes.map((node) => ({
-      ...node,
-      ...(manualPositions[node.id] ?? {})
-    }))
-  }), [baseTopology, manualPositions]);
+  const topology = useMemo(() => buildTopology(filteredResources, cronJobWindowHours), [filteredResources, cronJobWindowHours]);
   const nodeById = useMemo(() => new Map(topology.nodes.map((node) => [node.id, node])), [topology.nodes]);
+  const resolvedPos = useMemo(() => {
+    const map = new Map<string, { x: number; y: number }>();
+    for (const node of topology.nodes) {
+      const manual = manualPositions[node.id];
+      map.set(node.id, manual ?? { x: node.x, y: node.y });
+    }
+    return map;
+  }, [topology.nodes, manualPositions]);
   const selectedNode = selectedNodeId ? nodeById.get(selectedNodeId) : undefined;
   const selectedNodeEvents = useMemo(() => eventsForNode(filteredResources.events, selectedNode), [filteredResources.events, selectedNode]);
-  const canvasHeight = Math.max(640, topology.nodes.reduce((height, node) => Math.max(height, node.y + cardHeight + 80), 0));
+  const canvasHeight = Math.max(640, topology.nodes.reduce((height, node) => {
+    const pos = resolvedPos.get(node.id);
+    const y = pos ? pos.y : node.y;
+    return Math.max(height, y + cardHeight + 80);
+  }, 0));
   const resourceCount = visibleResourceCount(filteredResources);
   const availableNamespaces = useMemo(() => namespaceOptions(resources, namespaces), [resources, namespaces]);
   const availableLabels = useMemo(() => {
@@ -4521,17 +4646,34 @@ function WorkloadTopologyPage() {
 
     return matched;
   }, [searchQuery, topology.nodes]);
+  const searchMatchList = useMemo(() => {
+    if (!searchMatchIds) return [];
+    return topology.nodes.filter((n) => searchMatchIds.has(n.id));
+  }, [searchMatchIds, topology.nodes]);
+  const [searchMatchIndex, setSearchMatchIndex] = useState(0);
+
+  useEffect(() => {
+    setSearchMatchIndex(0);
+    if (searchMatchList.length > 0) {
+      const first = searchMatchList[0];
+      const pos = resolvedPos.get(first.id);
+      const nx = pos ? pos.x : first.x;
+      const ny = pos ? pos.y : first.y;
+      navigateToCanvasPoint(nx + cardWidth / 2, ny + cardHeight / 2);
+    }
+  }, [searchMatchList]);
+
   const edgePaths = useMemo(() => topology.edges.map((edge) => {
-    const from = nodeById.get(edge.from);
-    const to = nodeById.get(edge.to);
-    if (!from || !to) return null;
+    const fromPos = resolvedPos.get(edge.from);
+    const toPos = resolvedPos.get(edge.to);
+    if (!fromPos || !toPos) return null;
     return {
       id: edge.id,
       from: edge.from,
       to: edge.to,
-      d: `M ${from.x + cardWidth} ${from.y + cardHeight / 2} C ${from.x + cardWidth + 42} ${from.y + cardHeight / 2}, ${to.x - 42} ${to.y + cardHeight / 2}, ${to.x} ${to.y + cardHeight / 2}`,
+      d: `M ${fromPos.x + cardWidth} ${fromPos.y + cardHeight / 2} C ${fromPos.x + cardWidth + 42} ${fromPos.y + cardHeight / 2}, ${toPos.x - 42} ${toPos.y + cardHeight / 2}, ${toPos.x} ${toPos.y + cardHeight / 2}`,
     };
-  }).filter(Boolean) as Array<{ id: string; from: string; to: string; d: string }>, [topology.edges, nodeById]);
+  }).filter(Boolean) as Array<{ id: string; from: string; to: string; d: string }>, [topology.edges, resolvedPos]);
 
   const issueNodes = useMemo(() => topology.nodes
     .filter((node) => node.status === "danger" || node.status === "warning")
@@ -4787,7 +4929,7 @@ function WorkloadTopologyPage() {
     return "normal";
   }
 
-  function edgeRelation(fromId: string, toId: string): string | undefined {
+  const edgeRelation = React.useCallback((fromId: string, toId: string): string | undefined => {
     const filterIds = searchMatchIds ?? labelMatchIds;
 
     if (filterIds) return filterIds.has(fromId) && filterIds.has(toId) ? "relation-connected" : "relation-dimmed";
@@ -4797,12 +4939,15 @@ function WorkloadTopologyPage() {
       return blastRadius ? `relation-blast is-${blastRadius.status}` : "relation-connected";
     }
     return undefined;
-  }
+  }, [searchMatchIds, labelMatchIds, selectedNodeId, connectedIds, blastRadius]);
 
   function focusNode(node: TopologyNode) {
     setSelectedNodeId(node.id);
     setSelectedNodeIds(new Set([node.id]));
-    navigateToCanvasPoint(node.x + cardWidth / 2, node.y + cardHeight / 2);
+    const pos = resolvedPos.get(node.id);
+    const nx = pos ? pos.x : node.x;
+    const ny = pos ? pos.y : node.y;
+    navigateToCanvasPoint(nx + cardWidth / 2, ny + cardHeight / 2);
   }
 
   function handleCanvasWheel(event: React.WheelEvent<HTMLDivElement>) {
@@ -4848,22 +4993,22 @@ function WorkloadTopologyPage() {
     setContextMenu({ x: event.clientX, y: event.clientY, node });
   }, []);
 
-  const stateRef = useRef({ selectedNodeId, selectedNodeIds, nodeById });
-  stateRef.current = { selectedNodeId, selectedNodeIds, nodeById };
+  const stateRef = useRef({ selectedNodeId, selectedNodeIds, resolvedPos });
+  stateRef.current = { selectedNodeId, selectedNodeIds, resolvedPos };
 
   const handleNodeDragStart = React.useCallback((event: React.MouseEvent, node: TopologyNode) => {
     event.stopPropagation();
-    const { selectedNodeId: selId, selectedNodeIds: selIds, nodeById: nById } = stateRef.current;
+    const { selectedNodeId: selId, selectedNodeIds: selIds, resolvedPos: rPos } = stateRef.current;
 
     const isMultiSelected = selIds.has(node.id) && selIds.size > 1;
     const dragIds = isMultiSelected ? [...selIds] : [node.id];
     const origins: Record<string, { x: number; y: number }> = {};
 
     for (const id of dragIds) {
-      const n = nById.get(id);
+      const pos = rPos.get(id);
 
-      if (n) {
-        origins[id] = { x: n.x, y: n.y };
+      if (pos) {
+        origins[id] = { x: pos.x, y: pos.y };
       }
     }
 
@@ -4960,6 +5105,17 @@ function WorkloadTopologyPage() {
                 if (event.key === "Escape") {
                   setSearchQuery("");
                   (event.target as HTMLInputElement).blur();
+                } else if (event.key === "Enter" && searchMatchList.length > 0) {
+                  const delta = event.shiftKey ? -1 : 1;
+                  const nextIndex = (searchMatchIndex + delta + searchMatchList.length) % searchMatchList.length;
+                  setSearchMatchIndex(nextIndex);
+                  const target = searchMatchList[nextIndex];
+                  const pos = resolvedPos.get(target.id);
+                  const nx = pos ? pos.x : target.x;
+                  const ny = pos ? pos.y : target.y;
+                  setSelectedNodeId(target.id);
+                  setSelectedNodeIds(new Set([target.id]));
+                  navigateToCanvasPoint(nx + cardWidth / 2, ny + cardHeight / 2);
                 }
               }}
             />
@@ -4968,7 +5124,9 @@ function WorkloadTopologyPage() {
             )}
           </div>
           {searchMatchIds !== null && (
-            <span className="WorkloadTopology__searchCount">{searchMatchIds.size} found</span>
+            <span className="WorkloadTopology__searchCount">
+              {searchMatchList.length > 0 ? `${searchMatchIndex + 1}/${searchMatchList.length}` : "0 found"}
+            </span>
           )}
           <label className="WorkloadTopology__filter">
             <span>CronJobs</span>
@@ -5137,10 +5295,13 @@ function WorkloadTopologyPage() {
               const hits = new Set<string>();
 
               for (const node of topology.nodes) {
-                const nodeRight = node.x + cardWidth;
-                const nodeBottom = node.y + cardHeight;
+                const pos = resolvedPos.get(node.id);
+                const nx = pos ? pos.x : node.x;
+                const ny = pos ? pos.y : node.y;
+                const nodeRight = nx + cardWidth;
+                const nodeBottom = ny + cardHeight;
 
-                if (node.x < marquee.x2 && nodeRight > marquee.x1 && node.y < marquee.y2 && nodeBottom > marquee.y1) {
+                if (nx < marquee.x2 && nodeRight > marquee.x1 && ny < marquee.y2 && nodeBottom > marquee.y1) {
                   hits.add(node.id);
                 }
               }
@@ -5177,21 +5338,14 @@ function WorkloadTopologyPage() {
             Grid
           </button>
           <div className="TopologyCanvas__content" style={{ height: canvasHeight, transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }}>
-            <svg className="TopologyCanvas__edges" width={canvasWidth} height={canvasHeight}>
-              {edgePaths.map((edge) => {
-                if (showIssuesOnly && (!issueNodeIds.has(edge.from) || !issueNodeIds.has(edge.to))) {
-                  return null;
-                }
-
-                return (
-                  <path
-                    key={edge.id}
-                    className={edgeRelation(edge.from, edge.to)}
-                    d={edge.d}
-                  />
-                );
-              })}
-            </svg>
+            <TopologyEdges
+              edgePaths={edgePaths}
+              showIssuesOnly={showIssuesOnly}
+              issueNodeIds={issueNodeIds}
+              edgeRelationFn={edgeRelation}
+              canvasWidth={canvasWidth}
+              canvasHeight={canvasHeight}
+            />
 
             <div className="TopologyCanvas__columns">
               {mainColumns.map(({ kind, label }) => (
@@ -5221,6 +5375,8 @@ function WorkloadTopologyPage() {
                 <TopologyCard
                 key={node.id}
                 node={node}
+                posX={resolvedPos.get(node.id)?.x ?? node.x}
+                posY={resolvedPos.get(node.id)?.y ?? node.y}
                 selected={selectedNodeId === node.id || selectedNodeIds.has(node.id)}
                 onDragStart={handleNodeDragStart}
                 relation={nodeRelation(node.id)}
@@ -5267,6 +5423,7 @@ function WorkloadTopologyPage() {
             canvasHeight={canvasHeight}
             canvasSize={canvasSize}
             nodes={showIssuesOnly ? topology.nodes.filter(n => issueNodeIds.has(n.id)) : topology.nodes}
+            positions={resolvedPos}
             offset={offset}
             scale={scale}
             onNavigate={navigateToCanvasPoint}
