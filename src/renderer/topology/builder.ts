@@ -578,10 +578,20 @@ export function buildTopology(resources: ResourceSet, cronJobWindowHours: number
         edges.push({ id: `${cronJobId}->${jobsId}`, from: cronJobId, to: jobsId });
 
         const allJobPods = cronJobJobs.flatMap((job) => podsByJob.get(`${getNamespace(job)}:${getName(job)}`) ?? []);
-        const podsId = `Pods:${cronJobKey}:pods`;
 
         if (allJobPods.length > 0) {
-          edges.push({ id: `${jobsId}->${podsId}`, from: jobsId, to: podsId });
+          const activePods = allJobPods.filter(pod => pod.status?.phase !== "Succeeded");
+          const completedPods = allJobPods.filter(pod => pod.status?.phase === "Succeeded");
+
+          if (activePods.length > 0) {
+            const activeId = `Pods:${cronJobKey}:active`;
+            edges.push({ id: `${jobsId}->${activeId}`, from: jobsId, to: activeId });
+          }
+
+          if (completedPods.length > 0) {
+            const completedId = `Pods:${cronJobKey}:completed`;
+            edges.push({ id: `${jobsId}->${completedId}`, from: jobsId, to: completedId });
+          }
         }
       }
     }
@@ -597,7 +607,7 @@ export function buildTopology(resources: ResourceSet, cronJobWindowHours: number
       const job = allVisibleJobs.find((j) => getName(j) === jobName && getNamespace(j) === getNamespace(pod));
       const cronJobName = job ? ownerName(job, "CronJob") : undefined;
 
-      podFrom = cronJobName ? `Pods:${getNamespace(pod)}:${cronJobName}:pods` : groupedPodNodeByPod.get(pod) ?? nodeId("Pod", pod);
+      podFrom = cronJobName ? `Pods:${getNamespace(pod)}:${cronJobName}:${pod.status?.phase === "Succeeded" ? "completed" : "active"}` : groupedPodNodeByPod.get(pod) ?? nodeId("Pod", pod);
     } else {
       podFrom = groupedPodNodeByPod.get(pod) ?? nodeId("Pod", pod);
     }

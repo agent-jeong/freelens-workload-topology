@@ -121,7 +121,6 @@ export function TopologyMinimap({
           try { event.currentTarget.setPointerCapture(event.pointerId); } catch {}
           const point = pointFromEvent(event);
           if (point) {
-            // @ts-ignore
             viewportDragRef.current = {
               offsetX: point.x - viewportX,
               offsetY: point.y - viewportY
@@ -133,8 +132,7 @@ export function TopologyMinimap({
           event.stopPropagation();
           const point = pointFromEvent(event);
           if (point && viewportDragRef.current) {
-            // @ts-ignore
-            const drag: { offsetX: number; offsetY: number } = viewportDragRef.current;
+            const drag = viewportDragRef.current;
             const nextViewportX = point.x - drag.offsetX;
             const nextViewportY = point.y - drag.offsetY;
 

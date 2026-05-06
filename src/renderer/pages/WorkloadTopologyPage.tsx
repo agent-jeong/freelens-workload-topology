@@ -54,15 +54,18 @@ const { K8sApi } = Renderer;
 
 function useTopologyStyles() {
   useEffect(() => {
-    if (document.getElementById(styleElementId)) {
-      return;
+    let styleElement = document.getElementById(styleElementId);
+
+    if (!styleElement) {
+      styleElement = document.createElement("style");
+      styleElement.id = styleElementId;
+      styleElement.textContent = topologyStyles;
+      document.head.appendChild(styleElement);
     }
 
-    const styleElement = document.createElement("style");
-
-    styleElement.id = styleElementId;
-    styleElement.textContent = topologyStyles;
-    document.head.appendChild(styleElement);
+    return () => {
+      styleElement?.remove();
+    };
   }, []);
 }
 

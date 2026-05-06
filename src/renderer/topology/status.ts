@@ -38,6 +38,11 @@ export function deploymentStatus(deployment: KubeObjectLike): TopologyStatus {
 
 export function serviceStatus(service: KubeObjectLike, deployments: KubeObjectLike[], pods: KubeObjectLike[]): TopologyStatus {
   const selector = serviceSelector(service);
+
+  if (!selector || Object.keys(selector).length === 0) {
+    return "healthy";
+  }
+
   const hasTarget =
     deployments.some((deployment) => labelsMatch(selector, deploymentTemplateLabels(deployment))) ||
     pods.some((pod) => labelsMatch(selector, getLabels(pod)));

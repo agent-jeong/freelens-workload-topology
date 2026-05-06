@@ -83,6 +83,11 @@ export function deploymentProblemReasons(deployment: KubeObjectLike): ProblemRea
 
 export function serviceProblemReasons(service: KubeObjectLike, deployments: KubeObjectLike[], pods: KubeObjectLike[]): ProblemReason[] {
   const selector = serviceSelector(service);
+
+  if (!selector || Object.keys(selector).length === 0) {
+    return [];
+  }
+
   const hasTarget =
     deployments.some((deployment) => labelsMatch(selector, deploymentTemplateLabels(deployment))) ||
     pods.some((pod) => labelsMatch(selector, getLabels(pod)));
@@ -91,7 +96,7 @@ export function serviceProblemReasons(service: KubeObjectLike, deployments: Kube
     return [];
   }
 
-  return [{ severity: "warning", message: selector ? "No Deployment or Pod matches this Service selector" : "Service has no selector" }];
+  return [{ severity: "warning", message: "No Deployment or Pod matches this Service selector" }];
 }
 
 export function ingressProblemReasons(ingress: KubeObjectLike, services: KubeObjectLike[]): ProblemReason[] {

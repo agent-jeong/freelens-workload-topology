@@ -95,7 +95,12 @@ export function podReferenceNames(pod: KubeObjectLike) {
     }
   }
 
-  for (const container of pod.spec?.containers ?? []) {
+  const allContainers = [
+    ...(pod.spec?.initContainers ?? []),
+    ...(pod.spec?.containers ?? [])
+  ];
+
+  for (const container of allContainers) {
     for (const envFrom of container.envFrom ?? []) {
       if (envFrom.configMapRef?.name) {
         configMaps.add(envFrom.configMapRef.name);
