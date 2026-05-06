@@ -10,7 +10,9 @@ Instead of jumping between Ingress, Service, Deployment, Pod, ConfigMap, and Sec
 
 ## Preview
 
-![Workload Topology screenshot](docs/assets/screenshot.png)
+![Workload Topology Main](docs/assets/screenshot-main.png)
+
+![Pod Logs Modal](docs/assets/screenshot-log.png)
 
 
 ## Why Workload Topology

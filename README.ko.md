@@ -10,7 +10,9 @@ Ingress, Service, Deployment, Pod, ConfigMap, Secret 상세 화면을 오가는 
 
 ## 미리보기
 
-![Workload Topology 스크린샷](docs/assets/screenshot.png)
+![Workload Topology 메인](docs/assets/screenshot-main.png)
+
+![Pod 로그 모달](docs/assets/screenshot-log.png)
 
 <details>
   <summary>데모 GIF 보기</summary>
