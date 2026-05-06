@@ -1,4 +1,4 @@
-export type TopologyKind = "Ingress" | "Service" | "Deployment" | "CronJobs" | "CronJob" | "Jobs" | "Job" | "Pod" | "Pods" | "ConfigMap" | "Secret";
+export type TopologyKind = "LoadBalancer" | "Ingress" | "Service" | "Deployment" | "CronJobs" | "CronJob" | "Jobs" | "Job" | "Pod" | "Pods" | "ConfigMap" | "Secret";
 export type TopologyStatus = "healthy" | "warning" | "danger" | "unknown";
 
 export type KubeObjectLike = {

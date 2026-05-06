@@ -84,6 +84,10 @@ export function buildTooltipRows(node: TopologyNode, metricsMap: Map<string, Pod
     if (image) rows.push({ label: "Image", value: image.split("/").pop() ?? image });
   } else if (node.kind === "Service") {
     if (spec?.type) rows.push({ label: "Type", value: spec.type });
+    const extIPs = spec?.type === "LoadBalancer"
+      ? (status?.loadBalancer?.ingress?.map((e: any) => e.ip || e.hostname).filter(Boolean) ?? [])
+      : [];
+    if (extIPs.length > 0) rows.push({ label: "External IP", value: extIPs.join(", ") });
     if (spec?.clusterIP) rows.push({ label: "ClusterIP", value: spec.clusterIP });
     if (spec?.ports?.length) {
       rows.push({ label: "Ports", value: spec.ports.map((p: any) => `${p.port}/${p.protocol || "TCP"}`).join(", ") });
@@ -167,7 +171,20 @@ export const TopologyCard = React.memo(function TopologyCard({
     }
   } else if (node.kind === "Service") {
     const spec = node.object?.spec as any;
-    if (spec?.ports?.length > 0) {
+    const status = node.object?.status as any;
+    const externalIPs = spec?.type === "LoadBalancer"
+      ? (status?.loadBalancer?.ingress?.map((e: any) => e.ip || e.hostname).filter(Boolean) ?? [])
+      : [];
+
+    if (externalIPs.length > 0) {
+      extraInfoTitle = `${node.namespace} | ${externalIPs.join(", ")}`;
+      extraInfoNode = (
+        <>
+          <span style={{ margin: "0 4px", opacity: 0.5 }}>|</span>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", display: "inline-block", verticalAlign: "bottom", maxWidth: "90px" }}>{externalIPs.join(", ")}</span>
+        </>
+      );
+    } else if (spec?.ports?.length > 0) {
       const portsString = spec.ports.map((p: any) => `${p.port}${p.nodePort ? `:${p.nodePort}` : ""}`).join(", ");
       extraInfoTitle = `${node.namespace} | ${portsString}`;
       extraInfoNode = (

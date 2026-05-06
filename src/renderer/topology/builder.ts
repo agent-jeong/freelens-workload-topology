@@ -172,7 +172,7 @@ export function buildTopology(resources: ResourceSet, cronJobWindowHours: number
   });
 
   const emptyKindCounts = (): Record<TopologyKind, number> => ({
-    Ingress: 0, Service: 0, Deployment: 0, CronJobs: 0, CronJob: 0, Jobs: 0, Job: 0, Pod: 0, Pods: 0, ConfigMap: 0, Secret: 0
+    LoadBalancer: 0, Ingress: 0, Service: 0, Deployment: 0, CronJobs: 0, CronJob: 0, Jobs: 0, Job: 0, Pod: 0, Pods: 0, ConfigMap: 0, Secret: 0
   });
   const itemsByRow = new Map<number, Record<TopologyKind, number>>();
   const track = (row: number, kind: TopologyKind) => {
@@ -196,13 +196,32 @@ export function buildTopology(resources: ResourceSet, cronJobWindowHours: number
     track(row, "Service");
   });
 
+  const rowByIngress = new Map<string, number>();
+
   ingresses.forEach((ingress, index) => {
     const targetService = services.find((service) =>
       getNamespace(service) === getNamespace(ingress) && ingressServiceNames(ingress).includes(getName(service))
     );
     const row = targetService ? rowByService.get(nodeId("Service", targetService)) ?? index : index;
 
+    rowByIngress.set(nodeId("Ingress", ingress), row);
     track(row, "Ingress");
+  });
+
+  const lbIngresses = ingresses.filter((ingress) => {
+    const lbEntries = ingress.status?.loadBalancer?.ingress;
+    return Array.isArray(lbEntries) && lbEntries.length > 0;
+  });
+
+  const lbByIngress = new Map<string, { ips: string[]; row: number }>();
+
+  lbIngresses.forEach((ingress) => {
+    const lbEntries = ingress.status.loadBalancer.ingress as Array<{ ip?: string; hostname?: string }>;
+    const ips = lbEntries.map((e) => e.ip || e.hostname).filter(Boolean) as string[];
+    const row = rowByIngress.get(nodeId("Ingress", ingress)) ?? 0;
+
+    lbByIngress.set(nodeId("Ingress", ingress), { ips, row });
+    track(row, "LoadBalancer");
   });
 
   podsByRow.forEach((rowPods, row) => {
@@ -286,6 +305,38 @@ export function buildTopology(resources: ResourceSet, cronJobWindowHours: number
 
     return (yByRow.get(row) ?? topPadding) + slot * (cardHeight + laneGap);
   };
+
+  lbIngresses.forEach((ingress) => {
+    const ingressId = nodeId("Ingress", ingress);
+    const lb = lbByIngress.get(ingressId);
+    if (!lb) return;
+
+    const lbName = lb.ips.join(", ");
+    const lbId = `LoadBalancer:${getNamespace(ingress)}:${getName(ingress)}`;
+
+    nodes.push({
+      id: lbId,
+      kind: "LoadBalancer",
+      name: lbName,
+      namespace: getNamespace(ingress),
+      status: "healthy",
+      statusText: `${lb.ips.length} endpoint(s)`,
+      x: columnX.LoadBalancer,
+      y: yFor(lb.row, "LoadBalancer"),
+      object: {
+        metadata: { name: lbName, namespace: getNamespace(ingress) },
+        toJSON: () => ({
+          kind: "LoadBalancer",
+          metadata: { name: lbName, namespace: getNamespace(ingress) },
+          source: getName(ingress),
+          endpoints: lb.ips
+        })
+      },
+      editable: false
+    });
+
+    edges.push({ id: `${lbId}->${ingressId}`, from: lbId, to: ingressId });
+  });
 
   ingresses.forEach((ingress, index) => {
     const targetService = services.find((service) =>

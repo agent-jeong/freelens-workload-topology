@@ -160,8 +160,12 @@ export function TopologyDetails({
       const type = spec?.type;
       const clusterIP = spec?.clusterIP;
       const ports = spec?.ports?.map((port: any) => `${port.port}${port.nodePort ? `:${port.nodePort}` : ""}/${port.protocol || "TCP"}`).join(", ");
+      const externalIP = type === "LoadBalancer"
+        ? status?.loadBalancer?.ingress?.map((e: any) => e.ip || e.hostname).filter(Boolean).join(", ")
+        : undefined;
 
       if (type) detailRows.push(<DetailRow key="type" label="Type" value={type} />);
+      if (externalIP) detailRows.push(<DetailRow key="externalIP" label="External IP" value={externalIP} onCopy={() => onCopy("external ip", externalIP)} />);
       if (clusterIP) detailRows.push(<DetailRow key="clusterIP" label="Cluster IP" value={clusterIP} onCopy={() => onCopy("cluster ip", clusterIP)} />);
       if (ports) detailRows.push(<DetailRow key="ports" label="Ports" value={ports} onCopy={() => onCopy("ports", ports)} />);
     } else if (activeNode.kind === "Ingress") {

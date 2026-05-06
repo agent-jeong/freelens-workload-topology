@@ -790,6 +790,7 @@ export const topologyStyles = `
   opacity: 0.85;
 }
 
+.TopologyCard.kind-LoadBalancer .TopologyCard__icon { color: #e67e22; }
 .TopologyCard.kind-Ingress .TopologyCard__icon { color: #4b7bec; }
 .TopologyCard.kind-Service .TopologyCard__icon { color: #26a69a; }
 .TopologyCard.kind-Deployment .TopologyCard__icon { color: #7e57c2; }

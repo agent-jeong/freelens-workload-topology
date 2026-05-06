@@ -6,7 +6,7 @@ export const cardHeight = 136;
 export const topPadding = 76;
 export const laneGap = 18;
 export const minGroupHeight = 166;
-export const canvasWidth = 1320;
+export const canvasWidth = 1530;
 export const minimapWidth = 210;
 export const minimapHeight = 132;
 export const layoutStoragePrefix = "freelens-workload-topology-layout";
@@ -17,20 +17,22 @@ export const LOG_LINE_HEIGHT = 24;
 export const LOG_OVERSCAN = 20;
 
 export const columnX: Record<TopologyKind, number> = {
-  Ingress: 60,
-  Service: 270,
-  Deployment: 480,
-  CronJobs: 60,
-  CronJob: 270,
-  Jobs: 480,
-  Job: 480,
-  Pod: 690,
-  Pods: 690,
-  ConfigMap: 900,
-  Secret: 1110
+  LoadBalancer: 60,
+  Ingress: 270,
+  Service: 480,
+  Deployment: 690,
+  CronJobs: 270,
+  CronJob: 480,
+  Jobs: 690,
+  Job: 690,
+  Pod: 900,
+  Pods: 900,
+  ConfigMap: 1110,
+  Secret: 1320
 };
 
 export const mainColumns: Array<{ kind: TopologyKind; label: string }> = [
+  { kind: "LoadBalancer", label: "LoadBalancer" },
   { kind: "Ingress", label: "Ingress" },
   { kind: "Service", label: "Service" },
   { kind: "Deployment", label: "Deployment" },
