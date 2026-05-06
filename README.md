@@ -1,6 +1,6 @@
 # Freelens Workload Topology
 
-[![License](https://img.shields.io/github/license/agent-jeong/freelens-workload-topology)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/agent-jeong/freelens-workload-topology?display_name=tag)](https://github.com/agent-jeong/freelens-workload-topology/releases) [![License](https://img.shields.io/github/license/agent-jeong/freelens-workload-topology)](LICENSE)
 
 [한국어](README.ko.md)
 
@@ -12,11 +12,6 @@ Instead of jumping between Ingress, Service, Deployment, Pod, ConfigMap, and Sec
 
 ![Workload Topology screenshot](docs/assets/screenshot.png)
 
-<details>
-  <summary>View demo GIF</summary>
-
-  ![Workload Topology demo](docs/assets/demo.gif)
-</details>
 
 ## Why Workload Topology
 
@@ -49,7 +44,7 @@ The extension uses the FreeLens renderer API and requires no extra sidecar or cl
 ### Inspection & Debugging
 - **Detail panel** with resource summary, related Kubernetes Events, and JSON tree search
 - **YAML editor** with live diff, apply warnings, and direct Kubernetes API update
-- **Pod logs** with Live tail, previous logs, container filter, severity filter, keyword search, line wrap, duplicate hiding, and virtual scrolling
+- **Pod logs** with Live tail, previous logs, container filter, severity filter, keyword search, line wrap, duplicate hiding, and adaptive virtual scrolling
 - **AI analysis prompt** copy with auto-masked secrets (no external API calls)
 - **Blast radius** analysis to visualize the failure impact of a selected resource
 
@@ -131,12 +126,21 @@ If metrics-server is not available, the topology continues to work normally with
 
 ```
 src/
-  main/index.ts        # FreeLens main extension entry point
-  renderer/index.tsx   # Topology page, resource queries, detail panel, YAML editor, pod logs
-  renderer/styles.ts   # Extension UI styles
+  main/index.ts                         # FreeLens main extension entry point
+  renderer/index.tsx                    # Minimal renderer entry / page registration
+  renderer/pages/WorkloadTopologyPage.tsx
+                                       # Main topology page and cluster interactions
+  renderer/components/                  # UI components (cards, detail panel, pod logs, minimap, etc.)
+  renderer/topology/                    # Topology graph building, status, problems, edges
+  renderer/utils/                       # Formatting, kube helpers, events, YAML/JSON/AI utilities
+  renderer/types.ts                     # Shared renderer types
+  renderer/constants.ts                 # Shared layout and UI constants
+  renderer/styles.ts                    # Extension UI styles
 electron.vite.config.ts  # Build configuration
 package.json             # Extension metadata and scripts
 ```
+
+At the moment, `src/renderer/index.tsx` is intentionally small (entry-only), while most implementation lives under `pages/`, `components/`, `topology/`, and `utils/`.
 
 ## Development
 
@@ -149,7 +153,7 @@ corepack pnpm build
 |---|---|
 | `pnpm build` | Production build |
 | `pnpm type:check` | TypeScript type checking |
-| `pnpm pack` | Create installable `.tgz` package |
+| `corepack pnpm pack` | Create installable `.tgz` package |
 
 ## Notes
 

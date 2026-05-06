@@ -2336,6 +2336,13 @@ export const topologyStyles = `
 .PodLogsModal__terminal.is-wrapped .PodLogsModal__line {
   white-space: pre-wrap;
   word-break: break-word;
+  align-items: start;
+  height: auto;
+  min-height: 24px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  padding-right: 40px;
+  overflow: visible;
 }
 
 .PodLogsModal__line:hover {

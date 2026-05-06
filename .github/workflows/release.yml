@@ -1,0 +1,98 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure tag commit is on main
+        run: |
+          git fetch origin main --depth=1
+          git merge-base --is-ancestor "$GITHUB_SHA" "origin/main"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify tag matches package version
+        run: |
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          if [ "v$PACKAGE_VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version v$PACKAGE_VERSION"
+            exit 1
+          fi
+
+      - name: Type check
+        run: pnpm type:check
+
+      - name: Build and pack
+        run: |
+          pnpm build
+          pnpm pack
+
+      - name: Read package asset
+        id: pkg
+        run: |
+          ASSET="$(node -e 'const pkg = require("./package.json"); const normalizedName = pkg.name.replace(/^@/, "").replace(/\//g, "-"); process.stdout.write(`${normalizedName}-${pkg.version}.tgz`);')"
+          echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes
+        env:
+          ASSET: ${{ steps.pkg.outputs.asset }}
+        run: |
+          PREVIOUS_TAG="$(git tag --sort=-version:refname | grep -Fxv "$GITHUB_REF_NAME" | head -n1)"
+          if [ -n "$PREVIOUS_TAG" ]; then
+            COMMIT_RANGE="$PREVIOUS_TAG..$GITHUB_REF_NAME"
+          else
+            COMMIT_RANGE="$GITHUB_REF_NAME"
+          fi
+
+          {
+            echo "## Changes"
+            git log --reverse --pretty=format:'- [`%h`](https://github.com/${{ github.repository }}/commit/%H) %s' "$COMMIT_RANGE"
+            echo
+            echo
+            echo "## Install"
+            echo "1. Download \`$ASSET\` from the release assets below."
+            echo "2. Open FreeLens and go to the **Extensions** screen."
+            echo "3. Install the downloaded \`.tgz\` file."
+            echo
+            echo "## Compare changes"
+            if [ -n "$PREVIOUS_TAG" ]; then
+              echo "- https://github.com/${{ github.repository }}/compare/$PREVIOUS_TAG...$GITHUB_REF_NAME"
+            else
+              echo "- Initial release"
+            fi
+          } > RELEASE_NOTES.md
+
+      - name: Create GitHub release
+        uses: ncipollo/release-action@v1
+        with:
+          artifactErrorsFailBuild: true
+          artifacts: ${{ steps.pkg.outputs.asset }}
+          bodyFile: RELEASE_NOTES.md
+          commit: ${{ github.sha }}
+          makeLatest: true
+          replacesArtifacts: true
+          tag: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
