@@ -2013,6 +2013,13 @@ export const topologyStyles = `
   overflow: hidden;
 }
 
+.PodLogsModal.is-fullscreen {
+  width: 100vw;
+  height: 100vh;
+  border-radius: 0;
+  border: none;
+}
+
 .PodLogsModal__header {
   display: flex;
   align-items: flex-start;
@@ -2034,6 +2041,13 @@ export const topologyStyles = `
   font-size: 16px;
   font-weight: 600;
   word-break: break-all;
+}
+
+.PodLogsModal__headerActions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
 .PodLogsModal__header button {
@@ -2076,7 +2090,8 @@ export const topologyStyles = `
 }
 
 .PodLogsModal__podFilter,
-.PodLogsModal__hiddenFilter {
+.PodLogsModal__hiddenFilter,
+.PodLogsModal__severityFilter {
   position: relative;
   display: flex;
   align-items: center;
@@ -2086,7 +2101,8 @@ export const topologyStyles = `
 }
 
 .PodLogsModal__podFilter > button,
-.PodLogsModal__hiddenFilter > button {
+.PodLogsModal__hiddenFilter > button,
+.PodLogsModal__severityFilter > button {
   max-width: 190px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2094,7 +2110,8 @@ export const topologyStyles = `
 }
 
 .PodLogsModal__podMenu,
-.PodLogsModal__hiddenMenu {
+.PodLogsModal__hiddenMenu,
+.PodLogsModal__severityMenu {
   position: absolute;
   top: 34px;
   left: 28px;
@@ -2149,7 +2166,8 @@ export const topologyStyles = `
   padding: 0;
 }
 
-.PodLogsModal__podMenu label {
+.PodLogsModal__podMenu label,
+.PodLogsModal__severityMenu label {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr);
   gap: 8px;
@@ -2159,11 +2177,13 @@ export const topologyStyles = `
   cursor: pointer;
 }
 
-.PodLogsModal__podMenu label:hover {
+.PodLogsModal__podMenu label:hover,
+.PodLogsModal__severityMenu label:hover {
   background: rgba(127, 180, 255, 0.08);
 }
 
-.PodLogsModal__podMenu input {
+.PodLogsModal__podMenu input,
+.PodLogsModal__severityMenu input {
   appearance: none;
   display: grid;
   place-items: center;
@@ -2176,12 +2196,14 @@ export const topologyStyles = `
   cursor: pointer;
 }
 
-.PodLogsModal__podMenu input:checked {
+.PodLogsModal__podMenu input:checked,
+.PodLogsModal__severityMenu input:checked {
   background: #4b7bec;
   border-color: #7fb4ff;
 }
 
-.PodLogsModal__podMenu input:checked::after {
+.PodLogsModal__podMenu input:checked::after,
+.PodLogsModal__severityMenu input:checked::after {
   width: 7px;
   height: 4px;
   content: "";
@@ -2190,12 +2212,14 @@ export const topologyStyles = `
   transform: translateY(-1px) rotate(-45deg);
 }
 
-.PodLogsModal__podMenu input:focus-visible {
+.PodLogsModal__podMenu input:focus-visible,
+.PodLogsModal__severityMenu input:focus-visible {
   outline: 2px solid rgba(127, 180, 255, 0.45);
   outline-offset: 2px;
 }
 
-.PodLogsModal__podMenu span {
+.PodLogsModal__podMenu span,
+.PodLogsModal__severityMenu span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2240,6 +2264,12 @@ export const topologyStyles = `
   color: #72c98f;
   border-color: #31a66a;
   background: rgba(49, 166, 106, 0.12);
+}
+
+.PodLogsModal__severityFilter > button.is-active {
+  color: #7fb4ff;
+  border-color: #4b7bec;
+  background: rgba(75, 123, 236, 0.12);
 }
 
 .PodLogsModal__toolbar button.is-danger {

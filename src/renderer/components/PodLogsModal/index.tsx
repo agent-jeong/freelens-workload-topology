@@ -59,9 +59,11 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
   const [podFilterOpen, setPodFilterOpen] = useState(false);
   const [hiddenFilterOpen, setHiddenFilterOpen] = useState(false);
   const [selectedContainer, setSelectedContainer] = useState("all");
-  const [errorsOnly, setErrorsOnly] = useState(false);
+  const [selectedSeverities, setSelectedSeverities] = useState<Set<string>>(new Set());
+  const [severityFilterOpen, setSeverityFilterOpen] = useState(false);
   const [wrapLogs, setWrapLogs] = useState(false);
   const [autoScroll, setAutoScroll] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
   const [selectedMatchIndex, setSelectedMatchIndex] = useState(0);
   const logBodyRef = useRef<HTMLDivElement | null>(null);
   const lineRefs = useRef<Array<HTMLDivElement | null>>([]);
@@ -191,8 +193,8 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
       lines = lines.filter(({ line }) => line.containerName === selectedContainer);
     }
 
-    if (errorsOnly) {
-      lines = lines.filter(({ line }) => line.severity === "error" || line.severity === "warning");
+    if (selectedSeverities.size > 0) {
+      lines = lines.filter(({ line }) => selectedSeverities.has(line.severity));
     }
 
     if (normalizedQuery) {
@@ -200,7 +202,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
     }
 
     return lines.map(({ line }) => line);
-  }, [searchableLines, debouncedQuery, selectedPods, selectedContainer, errorsOnly, excludedMessages]);
+  }, [searchableLines, debouncedQuery, selectedPods, selectedContainer, selectedSeverities, excludedMessages]);
 
   const matchCount = debouncedQuery.trim() ? filteredLines.length : 0;
   const selectedMatchText = matchCount > 0 ? `${selectedMatchIndex + 1} / ${matchCount}` : debouncedQuery.trim() ? "0 / 0" : `${filteredLines.length} lines`;
@@ -209,7 +211,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
 
   useEffect(() => {
     setSelectedMatchIndex(0);
-  }, [query, selectedPods, selectedContainer, errorsOnly]);
+  }, [query, selectedPods, selectedContainer, selectedSeverities]);
 
   useEffect(() => {
     if (selectedMatchIndex >= filteredLines.length) {
@@ -224,6 +226,24 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
 
     logBodyRef.current.scrollTop = logBodyRef.current.scrollHeight;
   }, [filteredLines, live, previous, query, autoScroll]);
+
+  function downloadLogs() {
+    const lines = filteredLines.map((line) => {
+      const ts = line.timestamp ? `[${line.timestamp}]` : "";
+      const source = `[${line.podName}/${line.containerName}]`;
+      return `${ts} ${source} ${line.message}`.trimStart();
+    });
+    const content = lines.join("\n");
+    const blob = new Blob([content], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const now = new Date();
+    const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${node.name}_${stamp}.log`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 
   function moveMatch(delta: number) {
     if (matchCount === 0) {
@@ -243,6 +263,13 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && fullscreen) {
+        event.preventDefault();
+        event.stopPropagation();
+        setFullscreen(false);
+        return;
+      }
+
       if (!query.trim() || matchCount === 0) {
         return;
       }
@@ -259,17 +286,22 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
     window.addEventListener("keydown", handleKeyDown);
 
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [query, matchCount]);
+  }, [query, matchCount, fullscreen]);
 
   return (
     <div className="PodLogsModal__backdrop" onMouseDown={onClose}>
-      <section className="PodLogsModal" onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Pod logs">
+      <section className={`PodLogsModal${fullscreen ? " is-fullscreen" : ""}`} onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Pod logs">
         <header className="PodLogsModal__header">
           <div>
             <span>Pod logs</span>
             <h3>{node.name}</h3>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close">&times;</button>
+          <div className="PodLogsModal__headerActions">
+            <button type="button" onClick={() => setFullscreen((v) => !v)} aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"} title={fullscreen ? "Exit fullscreen" : "Fullscreen"}>
+              {fullscreen ? "\u29C9" : "\u26F6"}
+            </button>
+            <button type="button" onClick={onClose} aria-label="Close">&times;</button>
+          </div>
         </header>
         <div className="PodLogsModal__toolbar">
           <label>
@@ -359,19 +391,48 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
               {containerOptions.map((containerName) => <option key={containerName} value={containerName}>{containerName}</option>)}
             </select>
           </label>
-          <button
-            type="button"
-            className={errorsOnly ? "is-active is-danger" : ""}
-            onClick={() => setErrorsOnly((value) => !value)}
-          >
-            Errors only
-          </button>
+          <div className="PodLogsModal__severityFilter">
+            <span>Log Level</span>
+            <button type="button" className={selectedSeverities.size > 0 ? "is-active" : ""} onClick={() => setSeverityFilterOpen((v) => !v)}>
+              {selectedSeverities.size === 0 ? "All" : [...selectedSeverities].join(", ")}
+            </button>
+            {severityFilterOpen ? (
+              <div className="PodLogsModal__severityMenu">
+                <label>
+                  <input type="checkbox" checked={selectedSeverities.size === 0} onChange={() => setSelectedSeverities(new Set())} />
+                  <span>All levels</span>
+                </label>
+                {(["error", "warning", "info", "debug", "unknown"] as const).map((sev) => (
+                  <label key={sev}>
+                    <input
+                      type="checkbox"
+                      checked={selectedSeverities.has(sev)}
+                      onChange={() => setSelectedSeverities((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(sev)) next.delete(sev); else next.add(sev);
+                        return next;
+                      })}
+                    />
+                    <span>{sev}</span>
+                  </label>
+                ))}
+              </div>
+            ) : null}
+          </div>
           <button
             type="button"
             className={wrapLogs ? "is-active" : ""}
             onClick={() => setWrapLogs((value) => !value)}
           >
             Wrap
+          </button>
+          <button
+            type="button"
+            onClick={downloadLogs}
+            disabled={filteredLines.length === 0}
+            title="Download filtered logs"
+          >
+            Download
           </button>
           <input
             type="text"
