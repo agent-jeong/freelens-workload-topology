@@ -710,8 +710,9 @@ export const topologyStyles = `
   position: absolute;
   box-sizing: border-box;
   width: 190px;
-  height: 136px;
-  padding: 10px 12px 10px 10px;
+  min-height: 136px;
+  height: auto;
+  padding: 10px 12px 8px 10px;
   color: var(--textColorPrimary);
   text-align: left;
   background: var(--layoutBackground);
@@ -849,6 +850,58 @@ export const topologyStyles = `
   white-space: nowrap;
 }
 
+
+.TopologyCard__gauge {
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 14px;
+}
+
+.TopologyCard__gaugeLabel {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--textColorSecondary);
+  flex-shrink: 0;
+}
+
+.TopologyCard__gaugeTrack {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--borderColor);
+  overflow: hidden;
+  min-width: 12px;
+}
+
+.TopologyCard__gaugeFill {
+  height: 100%;
+  border-radius: 3px;
+  background: #4a9eff;
+  transition: width 0.3s ease;
+}
+
+.TopologyCard__gaugeFill.is-high {
+  background: #d44848;
+}
+
+.TopologyCard__gaugeValue {
+  font-size: 10px;
+  color: var(--textColorPrimary);
+  font-weight: 600;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.TopologyCard__gaugeSep {
+  width: 1px;
+  height: 10px;
+  background: var(--borderColor);
+  flex-shrink: 0;
+  margin: 0 1px;
+}
+
 .TopologyCard__problem {
   overflow: hidden;
   margin-top: 6px;
@@ -876,8 +929,8 @@ export const topologyStyles = `
   transform: translateX(-50%);
   margin-top: 8px;
   padding: 8px 10px;
-  min-width: 170px;
-  max-width: 260px;
+  min-width: 200px;
+  max-width: 340px;
   background: rgba(22, 28, 36, 0.95);
   border: 1px solid rgba(127, 180, 255, 0.15);
   border-radius: 6px;
@@ -908,8 +961,8 @@ export const topologyStyles = `
 .TopologyCard__tooltipRow {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  gap: 12px;
+  align-items: baseline;
+  gap: 8px;
   padding: 2px 0;
 }
 
@@ -919,21 +972,23 @@ export const topologyStyles = `
   text-transform: none;
   font-weight: 400;
   flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .TopologyCard__tooltipRow strong {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   color: var(--textColorPrimary);
   text-align: right;
-  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .TopologyCard__tooltip.is-wide {
-  min-width: 320px;
-  max-width: 420px;
+  min-width: 340px;
+  max-width: 480px;
 }
 
 .TopologyCard__tooltipSep {
@@ -968,6 +1023,7 @@ export const topologyStyles = `
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 160px;
+  font-variant-numeric: tabular-nums;
 }
 
 .TopologyCard__tooltipTable td:nth-child(n+2) {
@@ -1807,8 +1863,10 @@ export const topologyStyles = `
 }
 
 .CodeEditor {
+  position: relative;
   display: grid;
   grid-template-columns: 42px minmax(0, 1fr);
+  grid-template-rows: 1fr;
   flex: 1;
   min-height: 260px;
   margin: 14px 14px 10px;
@@ -1876,6 +1934,17 @@ export const topologyStyles = `
 
 .CodeEditor__highlight code {
   font: inherit;
+  display: block;
+  margin: 0;
+  padding: 0;
+}
+
+.CodeEditor__highlight mark {
+  font: inherit;
+  line-height: inherit;
+  display: inline;
+  padding: 0;
+  margin: 0;
 }
 
 .TopologyDetails__yaml {
@@ -1884,6 +1953,7 @@ export const topologyStyles = `
   background: transparent;
   resize: none;
   outline: none;
+  overflow: auto;
   z-index: 1;
 }
 
@@ -1894,6 +1964,79 @@ export const topologyStyles = `
 
 .CodeEditor:focus-within {
   border-color: #4b7bec;
+}
+
+.CodeEditor__search {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--contentColor);
+  border: 1px solid var(--borderColor);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.CodeEditor__search input {
+  width: 140px;
+  padding: 2px 6px;
+  font-size: 12px;
+  color: var(--textColorPrimary);
+  background: var(--mainBackground);
+  border: 1px solid var(--borderColor);
+  border-radius: 3px;
+  outline: none;
+}
+
+.CodeEditor__search input:focus {
+  border-color: #4b7bec;
+}
+
+.CodeEditor__searchCount {
+  font-size: 11px;
+  color: var(--textColorSecondary);
+  min-width: 32px;
+  text-align: center;
+}
+
+.CodeEditor__search button {
+  padding: 2px 6px;
+  font-size: 12px;
+  color: var(--textColorPrimary);
+  background: var(--mainBackground);
+  border: 1px solid var(--borderColor);
+  border-radius: 3px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.CodeEditor__search button:hover {
+  background: var(--contentColor);
+}
+
+.CodeEditor__search button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.CodeEditor__match {
+  background: rgba(255, 200, 50, 0.35);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0;
+  margin: 0;
+}
+
+.CodeEditor__matchCurrent {
+  background: rgba(255, 150, 0, 0.65);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0;
+  margin: 0;
 }
 
 .yaml-key {
@@ -2656,5 +2799,160 @@ export const topologyStyles = `
 
 .ConfirmDialog__actions button.is-danger:hover {
   background: #c03a3a;
+}
+
+/* Pod Shell Modal */
+.PodShellModal__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.PodShellModal {
+  width: 720px;
+  max-width: 90vw;
+  height: 520px;
+  max-height: 80vh;
+  background: var(--mainBackground);
+  border: 1px solid var(--borderColor);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.PodShellModal__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--borderColor);
+  background: var(--contentColor);
+}
+
+.PodShellModal__header h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.PodShellModal__controls {
+  display: flex;
+  gap: 6px;
+}
+
+.PodShellModal__controls select {
+  font-size: 12px;
+  padding: 2px 6px;
+  background: var(--mainBackground);
+  color: var(--textColorPrimary);
+  border: 1px solid var(--borderColor);
+  border-radius: 4px;
+  max-width: 200px;
+}
+
+.PodShellModal__close {
+  background: none;
+  border: none;
+  color: var(--textColorSecondary);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.PodShellModal__close:hover {
+  color: var(--textColorPrimary);
+}
+
+.PodShellModal__output {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 14px;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  background: #1a1a2e;
+  color: #e0e0e0;
+}
+
+.PodShellModal__hint {
+  color: #888;
+  font-style: italic;
+}
+
+.PodShellModal__hint code {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.PodShellModal__entry {
+  margin-bottom: 8px;
+}
+
+.PodShellModal__cmd {
+  color: #4a9eff;
+  font-weight: 600;
+}
+
+.PodShellModal__result {
+  margin: 2px 0 0 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: #e0e0e0;
+}
+
+.PodShellModal__result.is-error {
+  color: #d44848;
+}
+
+.PodShellModal__running {
+  color: #d99b20;
+  animation: blink 1s step-end infinite;
+}
+
+@keyframes blink {
+  50% { opacity: 0.4; }
+}
+
+.PodShellModal__input {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--borderColor);
+  background: #1a1a2e;
+}
+
+.PodShellModal__prompt {
+  color: #4a9eff;
+  font-family: monospace;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.PodShellModal__input input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #e0e0e0;
+  font-family: monospace;
+  font-size: 12px;
+  padding: 4px 0;
+}
+
+.PodShellModal__input input::placeholder {
+  color: #666;
 }
 `;

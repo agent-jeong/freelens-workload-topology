@@ -76,22 +76,7 @@ export function buildTopology(resources: ResourceSet, cronJobWindowHours: number
   const rowByService = new Map<string, number>();
   const yByRow = new Map<number, number>();
   const sortedDeployments = [...deployments].sort((a, b) => getName(a).localeCompare(getName(b)));
-  const jobNamesWithLivePods = new Set(
-    pods
-      .map((pod) => {
-        const jobName = ownerName(pod, "Job");
-
-        return jobName ? `${getNamespace(pod)}:${jobName}` : null;
-      })
-      .filter(Boolean) as string[]
-  );
-  const recentJobs = filterRecentJobs(jobs, cronJobWindowHours);
-  const livePodsJobs = jobs.filter((job) => {
-    const key = `${getNamespace(job)}:${getName(job)}`;
-
-    return !recentJobs.some((recentJob) => `${getNamespace(recentJob)}:${getName(recentJob)}` === key) && jobNamesWithLivePods.has(key);
-  });
-  const allVisibleJobs = [...recentJobs, ...livePodsJobs];
+  const allVisibleJobs = filterRecentJobs(jobs, cronJobWindowHours);
   const sortedCronJobs = [...cronJobs].sort((a, b) => getName(a).localeCompare(getName(b)));
   const jobsByCronJob = new Map<string, KubeObjectLike[]>();
 

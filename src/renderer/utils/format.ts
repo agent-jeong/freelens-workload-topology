@@ -21,8 +21,8 @@ export function parseCpu(value: string): number {
 }
 
 export function formatCpu(millis: number): string {
-  if (millis >= 1000) return `${(millis / 1000).toFixed(1)} cores`;
-  return `${Math.round(millis)}m`;
+  if (millis >= 1000) return `${(millis / 1000).toFixed(2)} cores`;
+  return `${Math.round(millis)}.00m`;
 }
 
 export function parseMem(value: string): number {
@@ -36,9 +36,9 @@ export function parseMem(value: string): number {
 }
 
 export function formatMem(bytes: number): string {
-  if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(1)} Gi`;
-  if (bytes >= 1048576) return `${Math.round(bytes / 1048576)} Mi`;
-  if (bytes >= 1024) return `${Math.round(bytes / 1024)} Ki`;
+  if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(2)} Gi`;
+  if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(2)} Mi`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(2)} Ki`;
   return `${bytes} B`;
 }
 

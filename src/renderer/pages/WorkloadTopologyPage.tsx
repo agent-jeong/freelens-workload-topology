@@ -8,6 +8,7 @@ import { TopologyContextMenu } from "../components/TopologyContextMenu";
 import { TopologyEdges } from "../components/TopologyEdges";
 import { TopologyMinimap } from "../components/TopologyMinimap";
 import { PodLogsModal } from "../components/PodLogsModal";
+import { PodShellModal } from "../components/PodShellModal";
 import {
   METRICS_INSTALL_CMD,
   METRICS_PATCH_CMD,
@@ -191,6 +192,7 @@ export function WorkloadTopologyPage() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
   const [logModalNode, setLogModalNode] = useState<TopologyNode | null>(null);
+  const [shellModalNode, setShellModalNode] = useState<TopologyNode | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -593,10 +595,15 @@ export function WorkloadTopologyPage() {
 
     if (node.kind === "Pod" || (node.kind === "Pods" && node.pods?.length)) {
       items.push({
+        label: node.kind === "Pods" ? `Shell (${node.pods!.length})…` : "Shell",
+        icon: "\u2318",
+        onClick: () => setShellModalNode(node),
+        separator: true,
+      });
+      items.push({
         label: node.kind === "Pods" ? `Restart Pod (${node.pods!.length})…` : "Restart Pod",
         icon: "\u21BB",
         onClick: () => setConfirmRestart(node),
-        separator: true,
       });
     }
 
@@ -1165,6 +1172,7 @@ export function WorkloadTopologyPage() {
         ) : null}
       </div>
       {logModalNode ? <PodLogsModal node={logModalNode} onClose={() => setLogModalNode(null)} /> : null}
+      {shellModalNode ? <PodShellModal node={shellModalNode} onClose={() => setShellModalNode(null)} /> : null}
       {showHelp ? (
         <div className="HelpOverlay__backdrop" onMouseDown={() => setShowHelp(false)}>
           <div className="HelpOverlay" onMouseDown={(e) => e.stopPropagation()}>

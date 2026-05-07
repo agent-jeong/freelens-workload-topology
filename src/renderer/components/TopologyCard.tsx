@@ -2,7 +2,14 @@ import React, { useState, useRef, useMemo } from "react";
 import type { TopologyNode, TopologyStatus, PodMetrics } from "../types";
 import { getName } from "../utils/kube";
 import { formatAge, parseCpu, formatCpu, parseMem, formatMem } from "../utils/format";
+import { describeCronSchedule } from "../utils/cron";
 import { ResourceIcon } from "./ResourceIcon";
+
+function fmtPct(ratio: number): string {
+  const v = Math.min(100, Math.round(ratio * 100));
+  if (v === 0) return ratio > 0 ? "<1%" : "0%";
+  return `${v}%`;
+}
 
 export function buildTooltipRows(node: TopologyNode, metricsMap: Map<string, PodMetrics>): Array<{ label: string; value: string }> {
   const rows: Array<{ label: string; value: string }> = [];
@@ -33,19 +40,35 @@ export function buildTooltipRows(node: TopologyNode, metricsMap: Map<string, Pod
     }
 
     if (hasMetrics) {
-      rows.push({ label: "CPU Usage", value: formatCpu(totalCpuUsage) });
-      rows.push({ label: "Mem Usage", value: formatMem(totalMemUsage) });
-    } else {
-      let totalCpuReq = 0; let totalMemReq = 0; let hasCpu = false; let hasMem = false;
+      let cpuReq = 0; let memReq = 0; let cpuLimit = 0; let memLimit = 0;
       for (const pod of pods) {
         for (const c of ((pod as any).spec?.containers ?? [])) {
           const req = c.resources?.requests;
-          if (req?.cpu) { totalCpuReq += parseCpu(req.cpu); hasCpu = true; }
-          if (req?.memory) { totalMemReq += parseMem(req.memory); hasMem = true; }
+          const lim = c.resources?.limits;
+          if (req?.cpu) cpuReq += parseCpu(req.cpu);
+          if (req?.memory) memReq += parseMem(req.memory);
+          if (lim?.cpu) cpuLimit += parseCpu(lim.cpu);
+          if (lim?.memory) memLimit += parseMem(lim.memory);
         }
       }
-      if (hasCpu) rows.push({ label: "CPU Req", value: formatCpu(totalCpuReq) });
-      if (hasMem) rows.push({ label: "Mem Req", value: formatMem(totalMemReq) });
+      if (cpuReq > 0) {
+        rows.push({ label: "CPU Request", value: `${formatCpu(totalCpuUsage)} / ${formatCpu(cpuReq)} (${fmtPct(totalCpuUsage / cpuReq)})` });
+      }
+      if (cpuLimit > 0) {
+        rows.push({ label: "CPU Limit", value: `${formatCpu(totalCpuUsage)} / ${formatCpu(cpuLimit)} (${fmtPct(totalCpuUsage / cpuLimit)})` });
+      }
+      if (!cpuReq && !cpuLimit) {
+        rows.push({ label: "CPU Usage", value: formatCpu(totalCpuUsage) });
+      }
+      if (memReq > 0) {
+        rows.push({ label: "Memory Request", value: `${formatMem(totalMemUsage)} / ${formatMem(memReq)} (${fmtPct(totalMemUsage / memReq)})` });
+      }
+      if (memLimit > 0) {
+        rows.push({ label: "Memory Limit", value: `${formatMem(totalMemUsage)} / ${formatMem(memLimit)} (${fmtPct(totalMemUsage / memLimit)})` });
+      }
+      if (!memReq && !memLimit) {
+        rows.push({ label: "Memory Usage", value: formatMem(totalMemUsage) });
+      }
     }
 
     if (totalRestarts > 0) rows.push({ label: "Restarts", value: String(totalRestarts) });
@@ -62,18 +85,34 @@ export function buildTooltipRows(node: TopologyNode, metricsMap: Map<string, Pod
 
     const m = metricsMap.get(node.name);
     if (m) {
-      rows.push({ label: "CPU Usage", value: formatCpu(m.cpu) });
-      rows.push({ label: "Mem Usage", value: formatMem(m.memory) });
-    } else {
       const containers = spec?.containers ?? [];
-      let cpuReq = 0; let memReq = 0; let hasCpu = false; let hasMem = false;
+      let cpuReq = 0; let memReq = 0; let cpuLimit = 0; let memLimit = 0;
       for (const c of containers) {
         const req = c.resources?.requests;
-        if (req?.cpu) { cpuReq += parseCpu(req.cpu); hasCpu = true; }
-        if (req?.memory) { memReq += parseMem(req.memory); hasMem = true; }
+        const lim = c.resources?.limits;
+        if (req?.cpu) cpuReq += parseCpu(req.cpu);
+        if (req?.memory) memReq += parseMem(req.memory);
+        if (lim?.cpu) cpuLimit += parseCpu(lim.cpu);
+        if (lim?.memory) memLimit += parseMem(lim.memory);
       }
-      if (hasCpu) rows.push({ label: "CPU Req", value: formatCpu(cpuReq) });
-      if (hasMem) rows.push({ label: "Mem Req", value: formatMem(memReq) });
+      if (cpuReq > 0) {
+        rows.push({ label: "CPU Request", value: `${formatCpu(m.cpu)} / ${formatCpu(cpuReq)} (${fmtPct(m.cpu / cpuReq)})` });
+      }
+      if (cpuLimit > 0) {
+        rows.push({ label: "CPU Limit", value: `${formatCpu(m.cpu)} / ${formatCpu(cpuLimit)} (${fmtPct(m.cpu / cpuLimit)})` });
+      }
+      if (!cpuReq && !cpuLimit) {
+        rows.push({ label: "CPU Usage", value: formatCpu(m.cpu) });
+      }
+      if (memReq > 0) {
+        rows.push({ label: "Memory Request", value: `${formatMem(m.memory)} / ${formatMem(memReq)} (${fmtPct(m.memory / memReq)})` });
+      }
+      if (memLimit > 0) {
+        rows.push({ label: "Memory Limit", value: `${formatMem(m.memory)} / ${formatMem(memLimit)} (${fmtPct(m.memory / memLimit)})` });
+      }
+      if (!memReq && !memLimit) {
+        rows.push({ label: "Memory Usage", value: formatMem(m.memory) });
+      }
     }
   } else if (node.kind === "Deployment") {
     const ready = status?.readyReplicas ?? 0;
@@ -135,11 +174,12 @@ export const TopologyCard = React.memo(function TopologyCard({
   if (node.kind === "CronJob") {
     const spec = node.object?.spec as any;
     if (spec?.schedule) {
+      const description = describeCronSchedule(spec.schedule);
       extraInfoTitle = `${node.namespace} | ${spec.schedule}${spec.suspend ? " (Paused)" : ""}`;
       extraInfoNode = (
         <>
           <span style={{ margin: "0 4px", opacity: 0.5 }}>|</span>
-          {spec.schedule}
+          {description}
           {spec.suspend ? <span style={{ color: "#d99b20", marginLeft: "4px" }}>(Paused)</span> : ""}
         </>
       );
@@ -210,6 +250,48 @@ export const TopologyCard = React.memo(function TopologyCard({
     }
   }
 
+  const metricsGauge = useMemo(() => {
+    function sumResources(pods: any[]) {
+      let cpuReq = 0; let memReq = 0;
+      for (const pod of pods) {
+        for (const c of ((pod as any).spec?.containers ?? [])) {
+          const req = c.resources?.requests;
+          if (req?.cpu) cpuReq += parseCpu(req.cpu);
+          if (req?.memory) memReq += parseMem(req.memory);
+        }
+      }
+      return { cpuReq, memReq };
+    }
+
+    if (node.kind === "Pod") {
+      const m = metrics.get(node.name);
+      if (!m) return null;
+      const { cpuReq, memReq } = sumResources([node.object]);
+      return {
+        cpu: m.cpu,
+        mem: m.memory,
+        cpuPct: cpuReq > 0 ? Math.min(100, Math.round(m.cpu / cpuReq * 100)) : null,
+        memPct: memReq > 0 ? Math.min(100, Math.round(m.memory / memReq * 100)) : null,
+      };
+    }
+    if (node.kind === "Pods" && node.pods?.length) {
+      let totalCpu = 0; let totalMem = 0; let hasMetrics = false;
+      for (const pod of node.pods) {
+        const m = metrics.get(getName(pod));
+        if (m) { totalCpu += m.cpu; totalMem += m.memory; hasMetrics = true; }
+      }
+      if (!hasMetrics) return null;
+      const { cpuReq, memReq } = sumResources(node.pods);
+      return {
+        cpu: totalCpu,
+        mem: totalMem,
+        cpuPct: cpuReq > 0 ? Math.min(100, Math.round(totalCpu / cpuReq * 100)) : null,
+        memPct: memReq > 0 ? Math.min(100, Math.round(totalMem / memReq * 100)) : null,
+      };
+    }
+    return null;
+  }, [node, metrics]);
+
   const primaryProblem = node.problems?.[0];
   const problemTitle = node.problems?.map((problem) => problem.message).join("\n");
   const tooltipRows = useMemo(() => buildTooltipRows(node, metrics), [node, metrics]);
@@ -278,6 +360,27 @@ export const TopologyCard = React.memo(function TopologyCard({
         {extraInfoNode}
       </div>
       <div className="TopologyCard__status">{node.statusText}</div>
+      {metricsGauge ? (
+        <div className="TopologyCard__gauge">
+          <span className="TopologyCard__gaugeLabel">C</span>
+          <div className="TopologyCard__gaugeTrack">
+            <div
+              className={`TopologyCard__gaugeFill${(metricsGauge.cpuPct ?? 0) >= 80 ? " is-high" : ""}`}
+              style={{ width: metricsGauge.cpuPct !== null ? `${metricsGauge.cpuPct}%` : "0%" }}
+            />
+          </div>
+          <span className="TopologyCard__gaugeValue">{metricsGauge.cpuPct !== null ? (metricsGauge.cpuPct === 0 ? (metricsGauge.cpu > 0 ? "<1%" : "0%") : `${metricsGauge.cpuPct}%`) : formatCpu(metricsGauge.cpu)}</span>
+          <span className="TopologyCard__gaugeSep" />
+          <span className="TopologyCard__gaugeLabel">M</span>
+          <div className="TopologyCard__gaugeTrack">
+            <div
+              className={`TopologyCard__gaugeFill${(metricsGauge.memPct ?? 0) >= 80 ? " is-high" : ""}`}
+              style={{ width: metricsGauge.memPct !== null ? `${metricsGauge.memPct}%` : "0%" }}
+            />
+          </div>
+          <span className="TopologyCard__gaugeValue">{metricsGauge.memPct !== null ? (metricsGauge.memPct === 0 ? (metricsGauge.mem > 0 ? "<1%" : "0%") : `${metricsGauge.memPct}%`) : formatMem(metricsGauge.mem)}</span>
+        </div>
+      ) : null}
       {primaryProblem ? (
         <div className={`TopologyCard__problem is-${primaryProblem.severity}`} title={problemTitle}>
           {primaryProblem.message}
@@ -296,7 +399,7 @@ export const TopologyCard = React.memo(function TopologyCard({
               <div className="TopologyCard__tooltipSep" />
               <table className="TopologyCard__tooltipTable">
                 <thead>
-                  <tr><th>Pod</th><th>Status</th><th>CPU</th><th>Mem</th><th>R</th></tr>
+                  <tr><th>Pod</th><th>Status</th><th>CPU</th><th>Memory</th><th>Restart</th></tr>
                 </thead>
                 <tbody>
                   {tooltipPods.map((p) => (

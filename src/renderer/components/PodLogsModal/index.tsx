@@ -228,11 +228,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
   }, [filteredLines, live, previous, query, autoScroll]);
 
   function downloadLogs() {
-    const lines = filteredLines.map((line) => {
-      const ts = line.timestamp ? `[${line.timestamp}]` : "";
-      const source = `[${line.podName}/${line.containerName}]`;
-      return `${ts} ${source} ${line.message}`.trimStart();
-    });
+    const lines = filteredLines.map((line) => line.message);
     const content = lines.join("\n");
     const blob = new Blob([content], { type: "text/plain" });
     const url = URL.createObjectURL(blob);

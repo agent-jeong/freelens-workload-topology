@@ -132,6 +132,143 @@ export function highlightYaml(text: string): React.ReactNode[] {
   });
 }
 
+/** Apply search highlighting by walking React nodes and wrapping matched ranges with <mark> */
+export function applySearchMarks(
+  nodes: React.ReactNode[],
+  query: string,
+  currentMatchIndex: number
+): { nodes: React.ReactNode[]; matchCount: number } {
+  if (!query) return { nodes, matchCount: 0 };
+
+  // First pass: find all match positions in the full text
+  const fullText = extractText(nodes);
+  const lowerText = fullText.toLowerCase();
+  const lowerQuery = query.toLowerCase();
+  const matchPositions: number[] = [];
+  let searchPos = 0;
+  while (true) {
+    const found = lowerText.indexOf(lowerQuery, searchPos);
+    if (found === -1) break;
+    matchPositions.push(found);
+    searchPos = found + 1;
+  }
+
+  if (matchPositions.length === 0) return { nodes, matchCount: 0 };
+
+  // Build a set of ranges to highlight
+  const ranges = matchPositions.map((pos, idx) => ({
+    start: pos,
+    end: pos + query.length,
+    isCurrent: idx === currentMatchIndex,
+  }));
+
+  // Second pass: walk nodes and split text at range boundaries
+  let charOffset = 0;
+  const result = wrapNodes(nodes, ranges, { offset: charOffset });
+
+  return { nodes: result.output, matchCount: matchPositions.length };
+}
+
+function extractText(nodes: React.ReactNode[]): string {
+  let text = "";
+  for (const node of nodes) {
+    if (typeof node === "string") {
+      text += node;
+    } else if (Array.isArray(node)) {
+      text += extractText(node);
+    } else if (React.isValidElement(node)) {
+      const children = (node.props as any).children;
+      if (typeof children === "string") {
+        text += children;
+      } else if (Array.isArray(children)) {
+        text += extractText(children);
+      } else if (children != null) {
+        text += extractText([children]);
+      }
+    }
+  }
+  return text;
+}
+
+function wrapNodes(
+  nodes: React.ReactNode[],
+  ranges: Array<{ start: number; end: number; isCurrent: boolean }>,
+  state: { offset: number }
+): { output: React.ReactNode[] } {
+  const output: React.ReactNode[] = [];
+
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+
+    if (typeof node === "string") {
+      const parts = splitTextWithMarks(node, ranges, state.offset);
+      output.push(...parts);
+      state.offset += node.length;
+    } else if (Array.isArray(node)) {
+      const inner = wrapNodes(node, ranges, state);
+      output.push(inner.output);
+    } else if (React.isValidElement(node)) {
+      const children = (node.props as any).children;
+
+      if (typeof children === "string") {
+        const parts = splitTextWithMarks(children, ranges, state.offset);
+        state.offset += children.length;
+        output.push(React.cloneElement(node, { key: node.key ?? `w${i}` } as any, ...parts));
+      } else if (Array.isArray(children)) {
+        const inner = wrapNodes(children, ranges, state);
+        output.push(React.cloneElement(node, { key: node.key ?? `w${i}` } as any, ...inner.output));
+      } else if (children != null) {
+        const inner = wrapNodes([children], ranges, state);
+        output.push(React.cloneElement(node, { key: node.key ?? `w${i}` } as any, ...inner.output));
+      } else {
+        output.push(node);
+      }
+    } else {
+      output.push(node);
+    }
+  }
+
+  return { output };
+}
+
+function splitTextWithMarks(
+  text: string,
+  ranges: Array<{ start: number; end: number; isCurrent: boolean }>,
+  offset: number
+): React.ReactNode[] {
+  const parts: React.ReactNode[] = [];
+  let cursor = 0;
+
+  for (const range of ranges) {
+    const localStart = range.start - offset;
+    const localEnd = range.end - offset;
+
+    // Skip ranges outside this text
+    if (localEnd <= 0 || localStart >= text.length) continue;
+
+    const clampStart = Math.max(0, localStart);
+    const clampEnd = Math.min(text.length, localEnd);
+
+    if (clampStart > cursor) {
+      parts.push(text.slice(cursor, clampStart));
+    }
+
+    parts.push(
+      <mark key={`m${offset + clampStart}`} className={range.isCurrent ? "CodeEditor__matchCurrent" : "CodeEditor__match"}>
+        {text.slice(clampStart, clampEnd)}
+      </mark>
+    );
+
+    cursor = clampEnd;
+  }
+
+  if (cursor < text.length) {
+    parts.push(text.slice(cursor));
+  }
+
+  return parts.length > 0 ? parts : [text];
+}
+
 export function highlightYamlValue(value: string): React.ReactNode {
   if (/^\s*#/.test(value)) {
     return <span className="yaml-comment">{value}</span>;

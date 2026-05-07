@@ -3,7 +3,6 @@ import type { KubeEventLike, TopologyNode } from "../../types";
 import { objectForCopy, stringifyObject } from "../../utils/kube";
 import { stringifyYaml, yamlDiff, yamlWarnings } from "../../utils/yaml";
 import { jsonMeaningRows } from "../../utils/json";
-import { scheduleWithDescription } from "../../utils/cron";
 import { buildAiAnalysisPrompt } from "../../utils/ai";
 import { causeHintsForEvents } from "../../topology/problems";
 import { DetailRow, ActionRow } from "./DetailRow";
@@ -175,7 +174,7 @@ export function TopologyDetails({
       if (hosts) detailRows.push(<DetailRow key="hosts" label="Hosts" value={hosts} onCopy={() => onCopy("hosts", hosts)} />);
       if (endpoints) detailRows.push(<DetailRow key="endpoints" label="Endpoint IP" value={endpoints} onCopy={() => onCopy("endpoints", endpoints)} />);
     } else if (activeNode.kind === "CronJob") {
-      if (spec?.schedule) detailRows.push(<DetailRow key="schedule" label="Schedule" value={scheduleWithDescription(spec.schedule, spec.timeZone)} />);
+      if (spec?.schedule) detailRows.push(<DetailRow key="schedule" label="Schedule" value={spec.timeZone ? `${spec.schedule} (${spec.timeZone})` : spec.schedule} />);
       if (spec?.suspend !== undefined) detailRows.push(<DetailRow key="suspend" label="Suspend" value={String(spec.suspend)} />);
     }
   }
@@ -295,6 +294,7 @@ export function TopologyDetails({
           ) : null}
           <CodeEditorWithLines
             value={yamlText}
+            readOnly={!activeNode.editable}
             onChange={(value) => {
               setYamlText(value);
               setApplyMessage(null);
