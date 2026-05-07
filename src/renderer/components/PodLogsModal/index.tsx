@@ -7,27 +7,106 @@ import { logLines, logMessageKey, podLogTargets } from "./logParser";
 
 const { K8sApi } = Renderer;
 
-async function fetchPodLogEntry(pod: KubeObjectLike, containerName: string, options: PodLogOptions & { sinceTime?: string }): Promise<PodLogEntry> {
+const LOG_BUFFER_LINES = 20000;
+const RANGE_LINE_LIMIT_OPTIONS = [100000, 200000, 500000] as const;
+const RANGE_FETCH_CONCURRENCY = 3;
+const RANGE_LIMIT_BYTES_PER_STREAM = 25 * 1024 * 1024;
+
+type PodLogFetchOptions = PodLogOptions & {
+  limitBytes?: number;
+  signal?: AbortSignal;
+  sinceTime?: string;
+};
+
+function toDateTimeLocalValue(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function parseDateTimeLocal(value: string): Date | null {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = new Date(value);
+
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function trimEntriesToLineLimit(entries: PodLogEntry[], maxLines: number): PodLogEntry[] {
+  if (entries.length === 0) {
+    return entries;
+  }
+
+  const maxPerEntry = Math.max(1, Math.ceil(maxLines / entries.length));
+
+  return entries.map((entry) => {
+    const lines = entry.text.split("\n").filter((line) => line.trim().length > 0);
+
+    if (entry.error || lines.length <= maxPerEntry) {
+      return entry;
+    }
+
+    return { ...entry, text: lines.slice(-maxPerEntry).join("\n") };
+  });
+}
+
+async function mapWithConcurrency<T, R>(items: T[], limit: number, worker: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+
+  async function run() {
+    while (cursor < items.length) {
+      const index = cursor;
+
+      cursor += 1;
+      results[index] = await worker(items[index], index);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
+
+  return results;
+}
+
+async function fetchPodLogEntry(pod: KubeObjectLike, containerName: string, options: PodLogFetchOptions): Promise<PodLogEntry> {
   const podName = getName(pod);
   const namespace = getNamespace(pod);
 
   try {
-    const queryOptions: any = {
-      container: containerName === "default" ? undefined : containerName,
-      timestamps: true,
-      previous: options.previous
-    };
+    const api = K8sApi.podsApi as any;
+    const apiBase = api.request?.config?.apiBase ?? "/api-kube";
+    const params = new URLSearchParams({
+      timestamps: "true",
+      previous: String(Boolean(options.previous))
+    });
 
-    if (options.sinceTime) {
-      queryOptions.sinceTime = options.sinceTime;
-    } else {
-      queryOptions.tailLines = options.tailLines;
+    if (containerName !== "default") {
+      params.set("container", containerName);
     }
 
-    const text = await (K8sApi.podsApi as any).getLogs(
-      { name: podName, namespace },
-      queryOptions
-    );
+    if (options.sinceTime) {
+      params.set("sinceTime", options.sinceTime);
+    } else {
+      params.set("tailLines", String(options.tailLines));
+    }
+
+    if (options.limitBytes) {
+      params.set("limitBytes", String(options.limitBytes));
+    }
+
+    const response = await fetch(`${apiBase}/api/v1/namespaces/${namespace}/pods/${podName}/log?${params.toString()}`, {
+      signal: options.signal
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+
+      throw new Error(`logs failed (${response.status}): ${text || response.statusText}`);
+    }
+
+    const text = await response.text();
 
     return {
       podName,
@@ -36,6 +115,10 @@ async function fetchPodLogEntry(pod: KubeObjectLike, containerName: string, opti
       text: text || (options.sinceTime ? "" : "No recent logs.")
     };
   } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw error;
+    }
+
     return {
       podName,
       namespace,
@@ -65,11 +148,27 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
   const [autoScroll, setAutoScroll] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [selectedMatchIndex, setSelectedMatchIndex] = useState(0);
+  const [rangeOpen, setRangeOpen] = useState(false);
+  const [rangeFrom, setRangeFrom] = useState(() => toDateTimeLocalValue(new Date(Date.now() - 60 * 60 * 1000)));
+  const [rangeTo, setRangeTo] = useState(() => toDateTimeLocalValue(new Date()));
+  const [rangeActive, setRangeActive] = useState(false);
+  const [rangeLoading, setRangeLoading] = useState(false);
+  const [rangeBounds, setRangeBounds] = useState<{ fromMs: number; toMs: number; label: string } | null>(null);
+  const [appliedRangeResultEdge, setAppliedRangeResultEdge] = useState<"earliest" | "latest">("earliest");
+  const [appliedRangeLineLimit, setAppliedRangeLineLimit] = useState<(typeof RANGE_LINE_LIMIT_OPTIONS)[number]>(100000);
+  const [rangeResultEdge, setRangeResultEdge] = useState<"earliest" | "latest">("earliest");
+  const [rangeLineLimit, setRangeLineLimit] = useState<(typeof RANGE_LINE_LIMIT_OPTIONS)[number]>(100000);
+  const [rangeMessage, setRangeMessage] = useState<string | null>(null);
   const logBodyRef = useRef<HTMLDivElement | null>(null);
   const lineRefs = useRef<Array<HTMLDivElement | null>>([]);
   const lastTimestampRef = useRef<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
+    if (rangeActive) {
+      return;
+    }
+
     let cancelled = false;
     const targets = podLogTargets(node);
     const visibleTargets = targets.slice(0, 24);
@@ -86,7 +185,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
       const loadedEntries = await Promise.all(visibleTargets.map(({ pod, containerName }) => fetchPodLogEntry(pod, containerName, { tailLines, previous })));
 
       if (!cancelled) {
-        setEntries(loadedEntries);
+        setEntries(trimEntriesToLineLimit(loadedEntries, LOG_BUFFER_LINES));
         setLoading(false);
 
         let latest = "";
@@ -138,6 +237,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
           text: existing.text + "\n" + newLines.join("\n")
         };
       }));
+      setEntries((current) => trimEntriesToLineLimit(current, LOG_BUFFER_LINES));
     }
 
     void loadLogs(true);
@@ -154,7 +254,13 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
     return () => {
       cancelled = true;
     };
-  }, [node.id, tailLines, live, previous]);
+  }, [node.id, tailLines, live, previous, rangeActive]);
+
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
 
   const [debouncedQuery, setDebouncedQuery] = useState(query);
 
@@ -168,7 +274,39 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
     return () => clearTimeout(timer);
   }, [query]);
 
-  const allLines = useMemo(() => logLines(entries), [entries]);
+  const parsedLines = useMemo(() => logLines(entries), [entries]);
+  const rangeLines = useMemo(() => {
+    if (!rangeBounds) {
+      return null;
+    }
+
+    return parsedLines.filter((line) => {
+      if (!line.timestamp) {
+        return false;
+      }
+
+      const value = new Date(line.timestamp).getTime();
+
+      return Number.isFinite(value) && value >= rangeBounds.fromMs && value <= rangeBounds.toMs;
+    });
+  }, [parsedLines, rangeBounds]);
+  const allLines = useMemo(() => {
+    if (!rangeLines) {
+      return parsedLines;
+    }
+
+    return appliedRangeResultEdge === "latest"
+      ? rangeLines.slice(-appliedRangeLineLimit)
+      : rangeLines.slice(0, appliedRangeLineLimit);
+  }, [parsedLines, rangeLines, appliedRangeResultEdge, appliedRangeLineLimit]);
+  const rangeLineCount = rangeLines?.length ?? null;
+  const rangeOverflow = Boolean(rangeLineCount !== null && rangeLineCount > appliedRangeLineLimit);
+  const rangeHasPendingChanges = Boolean(rangeBounds && (
+    rangeResultEdge !== appliedRangeResultEdge ||
+    rangeLineLimit !== appliedRangeLineLimit ||
+    rangeFrom.replace("T", " ") !== rangeBounds.label.split(" ~ ")[0] ||
+    rangeTo.replace("T", " ") !== rangeBounds.label.split(" ~ ")[1]
+  ));
   const podOptions = useMemo(() => [...new Set(allLines.map((line) => line.podName))].sort(), [allLines]);
   const containerOptions = useMemo(() => [...new Set(allLines.map((line) => line.containerName))].sort(), [allLines]);
   const searchableLines = useMemo(() => allLines.map((line) => ({
@@ -211,7 +349,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
 
   useEffect(() => {
     setSelectedMatchIndex(0);
-  }, [query, selectedPods, selectedContainer, selectedSeverities]);
+  }, [query, selectedPods, selectedContainer, selectedSeverities, rangeBounds]);
 
   useEffect(() => {
     if (selectedMatchIndex >= filteredLines.length) {
@@ -257,8 +395,123 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
     ));
   }
 
+  function cancelRangeLoad() {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setRangeLoading(false);
+    setLoading(false);
+    if (!rangeBounds) {
+      setRangeActive(false);
+    }
+    setRangeMessage("Range log request cancelled.");
+  }
+
+  function clearRange() {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setRangeActive(false);
+    setRangeLoading(false);
+    setRangeBounds(null);
+    setRangeMessage(null);
+    setLoading(true);
+  }
+
+  async function applyRange() {
+    const fromDate = parseDateTimeLocal(rangeFrom);
+    const toDate = parseDateTimeLocal(rangeTo);
+
+    if (!fromDate || !toDate) {
+      setRangeMessage("Enter both From and To date/time values.");
+      return;
+    }
+
+    if (fromDate.getTime() > toDate.getTime()) {
+      setRangeMessage("From must be earlier than To.");
+      return;
+    }
+
+    if (rangeBounds && fromDate.getTime() === rangeBounds.fromMs && toDate.getTime() === rangeBounds.toMs) {
+      setAppliedRangeResultEdge(rangeResultEdge);
+      setAppliedRangeLineLimit(rangeLineLimit);
+      setRangeMessage(null);
+      return;
+    }
+
+    const targets = podLogTargets(node);
+    const visibleTargets = targets.slice(0, 24);
+    const hours = (toDate.getTime() - fromDate.getTime()) / 3600000;
+
+    if (hours > 24) {
+      const confirmed = window.confirm(`This range is ${Math.round(hours)} hours across ${visibleTargets.length} stream(s). Kubernetes will return everything after From and the extension will filter To locally. Continue?`);
+
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setRangeActive(true);
+    setRangeLoading(true);
+    setLoading(true);
+    setLive(false);
+    setPrevious(false);
+    setRangeMessage(`Loading range logs from ${rangeFrom.replace("T", " ")} to ${rangeTo.replace("T", " ")} · ${visibleTargets.length} stream(s).`);
+    setLimitMessage(targets.length > visibleTargets.length ? `Showing first ${visibleTargets.length} of ${targets.length} log streams.` : null);
+    lastTimestampRef.current = null;
+
+    try {
+      const loadedEntries = await mapWithConcurrency(
+        visibleTargets,
+        RANGE_FETCH_CONCURRENCY,
+        ({ pod, containerName }) => fetchPodLogEntry(pod, containerName, {
+          tailLines,
+          previous: false,
+          sinceTime: fromDate.toISOString(),
+          limitBytes: RANGE_LIMIT_BYTES_PER_STREAM,
+          signal: controller.signal
+        })
+      );
+
+      if (controller.signal.aborted) {
+        return;
+      }
+
+      setEntries(loadedEntries);
+      setRangeBounds({
+        fromMs: fromDate.getTime(),
+        toMs: toDate.getTime(),
+        label: `${rangeFrom.replace("T", " ")} ~ ${rangeTo.replace("T", " ")}`
+      });
+      setAppliedRangeResultEdge(rangeResultEdge);
+      setAppliedRangeLineLimit(rangeLineLimit);
+      setRangeMessage(null);
+    } catch (error) {
+      if (controller.signal.aborted) {
+        return;
+      }
+
+      setRangeMessage(error instanceof Error ? error.message : "Failed to load range logs.");
+    } finally {
+      if (!controller.signal.aborted) {
+        setRangeLoading(false);
+        setLoading(false);
+        abortRef.current = null;
+      }
+    }
+  }
+
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && rangeOpen) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        setRangeOpen(false);
+        return;
+      }
+
       if (event.key === "Escape" && fullscreen) {
         event.preventDefault();
         event.stopPropagation();
@@ -282,7 +535,24 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
     window.addEventListener("keydown", handleKeyDown);
 
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [query, matchCount, fullscreen]);
+  }, [query, matchCount, fullscreen, rangeOpen]);
+
+  useEffect(() => {
+    function stopEscForParent(event: KeyboardEvent) {
+      if (event.key !== "Escape" || !rangeOpen) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      setRangeOpen(false);
+    }
+
+    document.addEventListener("keydown", stopEscForParent, true);
+
+    return () => document.removeEventListener("keydown", stopEscForParent, true);
+  }, [rangeOpen]);
 
   return (
     <div className="PodLogsModal__backdrop" onMouseDown={onClose}>
@@ -302,20 +572,20 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
         <div className="PodLogsModal__toolbar">
           <label>
             <span>Tail</span>
-            <select value={tailLines} onChange={(event) => setTailLines(Number(event.target.value))}>
+            <select value={tailLines} disabled={rangeActive} onChange={(event) => setTailLines(Number(event.target.value))}>
               <option value={100}>100</option>
               <option value={300}>300</option>
               <option value={1000}>1000</option>
               <option value={5000}>5000</option>
             </select>
           </label>
-          <button type="button" className={live && !previous ? "is-active" : ""} disabled={previous} onClick={() => setLive((value) => !value)}>
+          <button type="button" className={live && !previous && !rangeActive ? "is-active" : ""} disabled={previous || rangeActive} onClick={() => setLive((value) => !value)}>
             Live
           </button>
           <button
             type="button"
             className={autoScroll ? "is-active" : ""}
-            disabled={!live || previous}
+            disabled={!live || previous || rangeActive}
             onClick={() => setAutoScroll((value) => !value)}
             title="Auto-scroll to latest logs"
           >
@@ -324,6 +594,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
           <button
             type="button"
             className={previous ? "is-active" : ""}
+            disabled={rangeActive}
             onClick={() => {
               setPrevious((value) => !value);
               setLive(false);
@@ -331,6 +602,55 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
           >
             Previous
           </button>
+          <div className="PodLogsModal__rangeFilter">
+            <button type="button" className={rangeActive ? "is-active" : ""} onClick={() => setRangeOpen((value) => !value)}>
+              Range
+            </button>
+            {rangeOpen ? (
+              <div className="PodLogsModal__rangeMenu">
+                <div className="PodLogsModal__rangeHeader">
+                  <strong>Date range</strong>
+                  <span>{rangeHasPendingChanges ? "Pending changes" : rangeActive ? "Active" : "Inactive"}</span>
+                </div>
+                <label className="PodLogsModal__rangeField">
+                  <span>From</span>
+                  <input type="datetime-local" value={rangeFrom} onChange={(event) => setRangeFrom(event.target.value)} />
+                </label>
+                <label className="PodLogsModal__rangeField">
+                  <span>To</span>
+                  <input type="datetime-local" value={rangeTo} onChange={(event) => setRangeTo(event.target.value)} />
+                </label>
+                <div className="PodLogsModal__rangeMode">
+                  <span>When capped</span>
+                  <div>
+                    <button type="button" className={rangeResultEdge === "earliest" ? "is-active" : ""} onClick={() => setRangeResultEdge("earliest")}>Earliest</button>
+                    <button type="button" className={rangeResultEdge === "latest" ? "is-active" : ""} onClick={() => setRangeResultEdge("latest")}>Latest</button>
+                  </div>
+                </div>
+                <label className="PodLogsModal__rangeField">
+                  <span>Max</span>
+                  <select value={rangeLineLimit} disabled={rangeLoading} onChange={(event) => setRangeLineLimit(Number(event.target.value) as (typeof RANGE_LINE_LIMIT_OPTIONS)[number])}>
+                    {RANGE_LINE_LIMIT_OPTIONS.map((value) => (
+                      <option key={value} value={value}>{value.toLocaleString()}</option>
+                    ))}
+                  </select>
+                </label>
+                <div className="PodLogsModal__rangeHint">
+                  Kubernetes supports start time only. End time is filtered locally.
+                  {rangeLineLimit >= 500000 ? " 500,000 lines may use more memory and slow search/filtering." : ""}
+                </div>
+                <div className="PodLogsModal__rangeActions">
+                  {rangeLoading ? (
+                    <button type="button" className="is-danger" onClick={cancelRangeLoad}>Cancel</button>
+                  ) : null}
+                  {rangeActive ? (
+                    <button type="button" onClick={clearRange}>Clear</button>
+                  ) : null}
+                  <button type="button" disabled={rangeLoading} onClick={() => void applyRange()}>Apply</button>
+                </div>
+              </div>
+            ) : null}
+          </div>
           {hiddenMessages.length > 0 ? (
             <div className="PodLogsModal__hiddenFilter">
               <span>Hidden</span>
@@ -398,7 +718,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
                   <input type="checkbox" checked={selectedSeverities.size === 0} onChange={() => setSelectedSeverities(new Set())} />
                   <span>All levels</span>
                 </label>
-                {(["error", "warning", "info", "debug", "unknown"] as const).map((sev) => (
+                {(["error", "warning", "info", "debug", "trace", "unknown"] as const).map((sev) => (
                   <label key={sev}>
                     <input
                       type="checkbox"
@@ -439,8 +759,11 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
           <span className="PodLogsModal__count">{selectedMatchText}</span>
         </div>
         {limitMessage ? <div className="PodLogsModal__notice">{limitMessage}</div> : null}
+        {rangeBounds ? <div className="PodLogsModal__notice">Range {rangeBounds.label} · {(rangeLineCount ?? allLines.length).toLocaleString()} lines in range</div> : null}
+        {rangeOverflow ? <div className="PodLogsModal__notice">More than {appliedRangeLineLimit.toLocaleString()} lines matched. Showing {appliedRangeResultEdge} lines.</div> : null}
+        {rangeMessage ? <div className="PodLogsModal__notice">{rangeMessage}</div> : null}
         {loading ? (
-          <div className="PodLogsModal__state">Loading pod logs...</div>
+          <div className="PodLogsModal__state">{rangeLoading ? "Loading range logs..." : "Loading pod logs..."}</div>
         ) : allLines.length === 0 ? (
           <div className="PodLogsModal__state">No pod logs available.</div>
         ) : (

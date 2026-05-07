@@ -112,15 +112,7 @@ Then install the generated `freelens-workload-topology-1.0.0.tgz` from the Exten
 
 To display real-time CPU and memory usage on Pod tooltips, the cluster needs a running [metrics-server](https://github.com/kubernetes-sigs/metrics-server).
 
-```shell
-kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
-```
-
-For local clusters (minikube, kind, etc.) that use self-signed certificates:
-
-```shell
-kubectl patch deployment metrics-server -n kube-system --type='json' -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
-```
+This extension does not install or modify cluster-wide metrics components. In production clusters, ask the cluster administrator to verify the metrics-server deployment, APIService status, RBAC, and cluster security policy.
 
 If metrics-server is not available, the topology continues to work normally without CPU/memory data.
 

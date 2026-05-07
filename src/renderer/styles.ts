@@ -2235,7 +2235,8 @@ export const topologyStyles = `
 
 .PodLogsModal__podFilter,
 .PodLogsModal__hiddenFilter,
-.PodLogsModal__severityFilter {
+.PodLogsModal__severityFilter,
+.PodLogsModal__rangeFilter {
   position: relative;
   display: flex;
   align-items: center;
@@ -2246,7 +2247,8 @@ export const topologyStyles = `
 
 .PodLogsModal__podFilter > button,
 .PodLogsModal__hiddenFilter > button,
-.PodLogsModal__severityFilter > button {
+.PodLogsModal__severityFilter > button,
+.PodLogsModal__rangeFilter > button {
   max-width: 190px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2255,7 +2257,8 @@ export const topologyStyles = `
 
 .PodLogsModal__podMenu,
 .PodLogsModal__hiddenMenu,
-.PodLogsModal__severityMenu {
+.PodLogsModal__severityMenu,
+.PodLogsModal__rangeMenu {
   position: absolute;
   top: 34px;
   left: 28px;
@@ -2274,6 +2277,138 @@ export const topologyStyles = `
 .PodLogsModal__hiddenMenu {
   left: 44px;
   width: 360px;
+}
+
+.PodLogsModal__rangeMenu {
+  left: 0;
+  width: 360px;
+  max-height: none;
+  padding: 10px;
+  overflow: visible;
+}
+
+.PodLogsModal__rangeHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--borderColor);
+}
+
+.PodLogsModal__rangeHeader strong {
+  color: var(--textColorPrimary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.PodLogsModal__rangeHeader span {
+  color: var(--textColorSecondary);
+  font-size: 11px;
+}
+
+.PodLogsModal__rangeField {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  margin: 8px 0;
+  color: var(--textColorSecondary);
+  font-size: 12px;
+}
+
+.PodLogsModal__rangeField span {
+  width: 46px;
+}
+
+.PodLogsModal__rangeField input,
+.PodLogsModal__rangeField select {
+  box-sizing: border-box;
+  width: 100%;
+  height: 32px;
+  min-width: 0;
+  padding: 0 9px;
+  color: var(--textColorPrimary);
+  background: var(--layoutBackground);
+  border: 1px solid var(--borderColor);
+  border-radius: 4px;
+  outline: none;
+  font-family: var(--font-main);
+  font-size: 12px;
+  color-scheme: dark;
+}
+
+.PodLogsModal__rangeField select {
+  cursor: pointer;
+}
+
+.PodLogsModal__rangeField input:focus,
+.PodLogsModal__rangeField select:focus {
+  border-color: #4b7bec;
+  box-shadow: 0 0 0 1px rgba(75, 123, 236, 0.35);
+}
+
+.PodLogsModal__rangeField input::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  filter: invert(0.8);
+  opacity: 0.65;
+}
+
+.PodLogsModal__rangeMode {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  margin: 10px 0 8px;
+  color: var(--textColorSecondary);
+  font-size: 12px;
+}
+
+.PodLogsModal__rangeMode > div {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  overflow: hidden;
+  border: 1px solid var(--borderColor);
+  border-radius: 4px;
+}
+
+.PodLogsModal__rangeMode button {
+  height: 30px;
+  padding: 0 8px;
+  color: var(--textColorSecondary);
+  background: var(--layoutBackground);
+  border: 0;
+  border-radius: 0;
+}
+
+.PodLogsModal__rangeMode button + button {
+  border-left: 1px solid var(--borderColor);
+}
+
+.PodLogsModal__rangeMode button.is-active {
+  color: var(--textColorPrimary);
+  background: rgba(160, 170, 180, 0.16);
+}
+
+.PodLogsModal__rangeHint {
+  margin: 10px 0 4px;
+  padding: 8px 9px;
+  color: var(--textColorSecondary);
+  background: rgba(127, 180, 255, 0.06);
+  border: 1px solid rgba(127, 180, 255, 0.12);
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.PodLogsModal__rangeActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--borderColor);
 }
 
 .PodLogsModal__hiddenActions {
@@ -2408,6 +2543,14 @@ export const topologyStyles = `
   color: #72c98f;
   border-color: #31a66a;
   background: rgba(49, 166, 106, 0.12);
+}
+
+.PodLogsModal__toolbar .PodLogsModal__rangeMode button.is-active {
+  color: #ffffff;
+  border-color: transparent;
+  background: #5a626d;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  font-weight: 700;
 }
 
 .PodLogsModal__severityFilter > button.is-active {
@@ -2569,6 +2712,10 @@ export const topologyStyles = `
 
 .PodLogsModal__line.severity-debug .PodLogsModal__severity {
   color: #56b6c2;
+}
+
+.PodLogsModal__line.severity-trace .PodLogsModal__severity {
+  color: #9aa6b2;
 }
 
 .PodLogsModal__source {
@@ -2815,7 +2962,7 @@ export const topologyStyles = `
 .PodShellModal {
   width: 720px;
   max-width: 90vw;
-  height: 520px;
+  min-height: 360px;
   max-height: 80vh;
   background: var(--mainBackground);
   border: 1px solid var(--borderColor);
@@ -2874,85 +3021,115 @@ export const topologyStyles = `
   color: var(--textColorPrimary);
 }
 
-.PodShellModal__output {
+.PodShellModal__body {
   flex: 1;
-  overflow-y: auto;
-  padding: 10px 14px;
-  font-family: monospace;
+  overflow: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.PodShellModal__summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.PodShellModal__summary div {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--borderColor);
+  border-radius: 6px;
+  background: var(--contentColor);
+}
+
+.PodShellModal__summary span {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--textColorSecondary);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.PodShellModal__summary strong {
+  display: block;
+  overflow: hidden;
+  color: var(--textColorPrimary);
   font-size: 12px;
-  line-height: 1.5;
-  background: #1a1a2e;
-  color: #e0e0e0;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .PodShellModal__hint {
-  color: #888;
-  font-style: italic;
+  color: var(--textColorSecondary);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .PodShellModal__hint code {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--contentColor);
   padding: 1px 4px;
   border-radius: 3px;
 }
 
-.PodShellModal__entry {
-  margin-bottom: 8px;
+.PodShellModal__copyError {
+  color: #d44848;
+  font-size: 12px;
 }
 
-.PodShellModal__cmd {
-  color: #4a9eff;
+.PodShellModal__commandBlock {
+  overflow: hidden;
+  border: 1px solid var(--borderColor);
+  border-radius: 6px;
+  background: var(--contentColor);
+}
+
+.PodShellModal__commandHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--borderColor);
+}
+
+.PodShellModal__commandHeader span {
+  color: var(--textColorPrimary);
+  font-size: 12px;
   font-weight: 600;
 }
 
-.PodShellModal__result {
-  margin: 2px 0 0 0;
-  white-space: pre-wrap;
-  word-break: break-all;
-  color: #e0e0e0;
+.PodShellModal__commandHeader button {
+  padding: 4px 8px;
+  background: var(--contentColor);
+  color: var(--textColorPrimary);
+  border: 1px solid var(--borderColor);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
 }
 
-.PodShellModal__result.is-error {
-  color: #d44848;
+.PodShellModal__commandHeader button:hover:not(:disabled) {
+  border-color: var(--colorInfo);
+  color: var(--colorInfo);
 }
 
-.PodShellModal__running {
-  color: #d99b20;
-  animation: blink 1s step-end infinite;
+.PodShellModal__commandHeader button:disabled {
+  cursor: default;
+  opacity: 0.5;
 }
 
-@keyframes blink {
-  50% { opacity: 0.4; }
-}
-
-.PodShellModal__input {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 14px;
-  border-top: 1px solid var(--borderColor);
+.PodShellModal__commandBlock pre {
+  margin: 0;
+  padding: 10px;
+  overflow-x: auto;
   background: #1a1a2e;
-}
-
-.PodShellModal__prompt {
-  color: #4a9eff;
-  font-family: monospace;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.PodShellModal__input input {
-  flex: 1;
-  background: transparent;
-  border: none;
-  outline: none;
   color: #e0e0e0;
   font-family: monospace;
   font-size: 12px;
-  padding: 4px 0;
-}
-
-.PodShellModal__input input::placeholder {
-  color: #666;
+  line-height: 1.5;
+  white-space: pre;
 }
 `;

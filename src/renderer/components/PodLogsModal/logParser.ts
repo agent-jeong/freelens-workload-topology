@@ -20,6 +20,12 @@ export function podLogTargets(node: TopologyNode): Array<{ pod: KubeObjectLike; 
 export function splitLogLine(line: string): { timestamp?: string; message: string } {
   // eslint-disable-next-line no-control-regex
   const plainLine = line.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
+  const leadingTimestampMatch = plainLine.match(/^(\d{4}[-/]\d{2}[-/]\d{2}[T\s]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)\s+(.*)$/);
+
+  if (leadingTimestampMatch) {
+    return { timestamp: leadingTimestampMatch[1], message: leadingTimestampMatch[2].trim() };
+  }
+
   const match = plainLine.match(/^(.*?)(\d{4}[-/]\d{2}[-/]\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)(.*)$/);
 
   if (match && match[1].length < 120 && match[2].length > 8) {
@@ -40,7 +46,11 @@ export function detectLogSeverity(value: string): PodLogLine["severity"] {
     return "warning";
   }
 
-  if (/\b(debug|trace|verbose)\b/.test(normalized) || /\b(d|dbug|trce)\b\s*[:\]]/.test(normalized)) {
+  if (/\b(trace)\b/.test(normalized) || /\b(trce)\b\s*[:\]]/.test(normalized)) {
+    return "trace";
+  }
+
+  if (/\b(debug|verbose)\b/.test(normalized) || /\b(d|dbug)\b\s*[:\]]/.test(normalized)) {
     return "debug";
   }
 
@@ -66,7 +76,11 @@ export function severityFromLevel(level: unknown): PodLogLine["severity"] {
     return "warning";
   }
 
-  if (normalized === "debug" || normalized === "trace") {
+  if (normalized === "trace") {
+    return "trace";
+  }
+
+  if (normalized === "debug") {
     return "debug";
   }
 
@@ -215,21 +229,50 @@ export function parseJsonLogMessage(value: string): { displayMessage: string; wr
   return undefined;
 }
 
+export function stripPlainLogPrefix(value: string): string {
+  const withoutTimestamp = value.replace(/^\d{4}[-/]\d{2}[-/]\d{2}[T\s]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?\s+/, "");
+  const springBootMatch = withoutTimestamp.match(/^(?:ERROR|ERR|WARN|WARNING|INFO|DEBUG|TRACE|FATAL)\s+\d+\s+---\s+(.*)$/i);
+
+  if (springBootMatch) {
+    return springBootMatch[1];
+  }
+
+  const springTraceMatch = withoutTimestamp.match(/^(?:ERROR|ERR|WARN|WARNING|INFO|DEBUG|TRACE|FATAL)\s+(.*)$/i);
+
+  if (springTraceMatch) {
+    return springTraceMatch[1];
+  }
+
+  return withoutTimestamp;
+}
+
 export function compactLogMessage(value: string): string {
-  const match = value.match(/^\[[^\]]+\]\s+\[\s*(?:ERROR|ERR|WARN|WARNING|INFO|DEBUG|TRACE|FATAL)\s*\]\s+([^\s(]+)(?:\([^)]*\))?\s+-\s*(.*)$/i);
+  const normalized = stripPlainLogPrefix(value);
+
+  if (normalized !== value) {
+    return normalized;
+  }
+
+  const match = normalized.match(/^\[[^\]]+\]\s+\[\s*(?:ERROR|ERR|WARN|WARNING|INFO|DEBUG|TRACE|FATAL)\s*\]\s+([^\s(]+)(?:\([^)]*\))?\s+-\s*(.*)$/i);
 
   if (!match) {
-    return value;
+    return normalized;
   }
 
   return `${match[1]} - ${match[2]}`;
 }
 
 export function wrappedLogMessage(value: string): string {
-  const match = value.match(/^\[[^\]]+\]\s+\[\s*(?:ERROR|ERR|WARN|WARNING|INFO|DEBUG|TRACE|FATAL)\s*\]\s+(.+?\([^)]*\))\s+-\s*(.*)$/i);
+  const normalized = stripPlainLogPrefix(value);
+
+  if (normalized !== value) {
+    return normalized;
+  }
+
+  const match = normalized.match(/^\[[^\]]+\]\s+\[\s*(?:ERROR|ERR|WARN|WARNING|INFO|DEBUG|TRACE|FATAL)\s*\]\s+(.+?\([^)]*\))\s+-\s*(.*)$/i);
 
   if (!match) {
-    return compactLogMessage(value);
+    return compactLogMessage(normalized);
   }
 
   return `${match[1]} - ${match[2]}`;

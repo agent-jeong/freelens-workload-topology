@@ -2,6 +2,16 @@ import React, { useRef } from "react";
 import type { TopologyNode, ViewportSize } from "../types";
 import { cardWidth, cardHeight, canvasWidth, minimapWidth, minimapHeight } from "../constants";
 
+const contentPadding = 160;
+
+function clamp(value: number, min: number, max: number): number {
+  if (max < min) {
+    return min;
+  }
+
+  return Math.min(Math.max(value, min), max);
+}
+
 export function TopologyMinimap({
   canvasHeight,
   canvasSize,
@@ -28,6 +38,44 @@ export function TopologyMinimap({
   const viewportHeight = Math.min(canvasHeight, canvasSize.height / scale);
   const viewportX = Math.min(Math.max(-offset.x / scale, 0), Math.max(canvasWidth - viewportWidth, 0));
   const viewportY = Math.min(Math.max(-offset.y / scale, 0), Math.max(canvasHeight - viewportHeight, 0));
+  const contentBounds = nodes.reduce((bounds, node) => {
+    const pos = positions.get(node.id);
+    const nx = pos ? pos.x : node.x;
+    const ny = pos ? pos.y : node.y;
+
+    return {
+      minX: Math.min(bounds.minX, nx),
+      minY: Math.min(bounds.minY, ny),
+      maxX: Math.max(bounds.maxX, nx + cardWidth),
+      maxY: Math.max(bounds.maxY, ny + cardHeight),
+    };
+  }, { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
+
+  const hasContentBounds = Number.isFinite(contentBounds.minX);
+
+  function clampViewport(nextViewportX: number, nextViewportY: number) {
+    const canvasMaxX = Math.max(canvasWidth - viewportWidth, 0);
+    const canvasMaxY = Math.max(canvasHeight - viewportHeight, 0);
+
+    if (!hasContentBounds) {
+      return {
+        x: clamp(nextViewportX, 0, canvasMaxX),
+        y: clamp(nextViewportY, 0, canvasMaxY),
+      };
+    }
+
+    const minX = clamp(contentBounds.minX - contentPadding, 0, canvasMaxX);
+    const minY = clamp(contentBounds.minY - contentPadding, 0, canvasMaxY);
+    const maxX = clamp(contentBounds.maxX + contentPadding - viewportWidth, 0, canvasMaxX);
+    const maxY = clamp(contentBounds.maxY + contentPadding - viewportHeight, 0, canvasMaxY);
+    const centerX = (contentBounds.minX + contentBounds.maxX - viewportWidth) / 2;
+    const centerY = (contentBounds.minY + contentBounds.maxY - viewportHeight) / 2;
+
+    return {
+      x: minX > maxX ? clamp(centerX, 0, canvasMaxX) : clamp(nextViewportX, minX, maxX),
+      y: minY > maxY ? clamp(centerY, 0, canvasMaxY) : clamp(nextViewportY, minY, maxY),
+    };
+  }
 
   function pointFromEvent(event: React.MouseEvent<HTMLDivElement> | React.PointerEvent<HTMLDivElement>) {
     const rect = minimapRef.current?.getBoundingClientRect();
@@ -52,10 +100,9 @@ export function TopologyMinimap({
     const nextViewportX = point.x - viewportWidth / 2;
     const nextViewportY = point.y - viewportHeight / 2;
 
-    const clampedX = Math.min(Math.max(nextViewportX, 0), Math.max(canvasWidth - viewportWidth, 0));
-    const clampedY = Math.min(Math.max(nextViewportY, 0), Math.max(canvasHeight - viewportHeight, 0));
+    const clamped = clampViewport(nextViewportX, nextViewportY);
 
-    onNavigate(clampedX + viewportWidth / 2, clampedY + viewportHeight / 2);
+    onNavigate(clamped.x + viewportWidth / 2, clamped.y + viewportHeight / 2);
   }
 
   return (
@@ -136,10 +183,9 @@ export function TopologyMinimap({
             const nextViewportX = point.x - drag.offsetX;
             const nextViewportY = point.y - drag.offsetY;
 
-            const clampedX = Math.min(Math.max(nextViewportX, 0), Math.max(canvasWidth - viewportWidth, 0));
-            const clampedY = Math.min(Math.max(nextViewportY, 0), Math.max(canvasHeight - viewportHeight, 0));
+            const clamped = clampViewport(nextViewportX, nextViewportY);
 
-            onNavigate(clampedX + viewportWidth / 2, clampedY + viewportHeight / 2);
+            onNavigate(clamped.x + viewportWidth / 2, clamped.y + viewportHeight / 2);
           }
         }}
         onPointerUp={(event) => {

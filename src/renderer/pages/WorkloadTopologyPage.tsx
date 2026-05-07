@@ -10,8 +10,6 @@ import { TopologyMinimap } from "../components/TopologyMinimap";
 import { PodLogsModal } from "../components/PodLogsModal";
 import { PodShellModal } from "../components/PodShellModal";
 import {
-  METRICS_INSTALL_CMD,
-  METRICS_PATCH_CMD,
   canvasWidth,
   cardHeight,
   cardWidth,
@@ -52,6 +50,15 @@ import {
 import { readStoredLayout, writeStoredLayout } from "../utils/layout";
 
 const { K8sApi } = Renderer;
+const viewportContentPadding = 160;
+
+function clamp(value: number, min: number, max: number): number {
+  if (max < min) {
+    return min;
+  }
+
+  return Math.min(Math.max(value, min), max);
+}
 
 function useTopologyStyles() {
   useEffect(() => {
@@ -82,7 +89,8 @@ async function fetchPodMetrics(namespace: string): Promise<MetricsResult> {
 
     const r = await fetch(url);
     if (!r.ok) {
-      if (r.status === 404 || r.status === 503) return { ok: false, reason: "not-installed" };
+      if (r.status === 404) return { ok: false, reason: "not-installed" };
+      if (r.status === 503) return { ok: false, reason: "api-unavailable" };
       if (r.status === 403) return { ok: false, reason: "forbidden" };
       return { ok: false, reason: `http-${r.status}` };
     }
@@ -470,12 +478,38 @@ export function WorkloadTopologyPage() {
     }
     return issues;
   }, [topology, showIssuesOnly]);
+  const visibleTopologyNodes = useMemo(
+    () => showIssuesOnly ? topology.nodes.filter((node) => issueNodeIds.has(node.id)) : topology.nodes,
+    [showIssuesOnly, topology.nodes, issueNodeIds]
+  );
+  const viewportContentBounds = useMemo(() => {
+    return visibleTopologyNodes.reduce((bounds, node) => {
+      const pos = resolvedPos.get(node.id);
+      const nx = pos ? pos.x : node.x;
+      const ny = pos ? pos.y : node.y;
+
+      return {
+        minX: Math.min(bounds.minX, nx),
+        minY: Math.min(bounds.minY, ny),
+        maxX: Math.max(bounds.maxX, nx + cardWidth),
+        maxY: Math.max(bounds.maxY, ny + cardHeight),
+      };
+    }, { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
+  }, [visibleTopologyNodes, resolvedPos]);
 
   useEffect(() => {
     if (selectedNodeId && !nodeById.has(selectedNodeId)) {
       setSelectedNodeId(null);
     }
   }, [nodeById, selectedNodeId]);
+
+  useEffect(() => {
+    setOffset((current) => {
+      const next = clampOffsetForScale(current, scale);
+
+      return Math.abs(next.x - current.x) < 0.5 && Math.abs(next.y - current.y) < 0.5 ? current : next;
+    });
+  }, [scale, canvasSize.width, canvasSize.height, viewportContentBounds]);
 
   const searchInputRef = React.useRef<HTMLInputElement>(null);
 
@@ -517,10 +551,18 @@ export function WorkloadTopologyPage() {
             });
           }
           break;
-        case "0": setScale(1); setOffset({ x: 0, y: 0 }); break;
-        case "-": setScale((s) => Math.max(0.3, s - 0.1)); break;
+        case "0": setScale(1); setOffset(clampOffsetForScale({ x: 0, y: 0 }, 1)); break;
+        case "-": setScale((s) => {
+          const nextScale = Math.max(0.3, s - 0.1);
+          setOffset((current) => clampOffsetForScale(current, nextScale));
+          return nextScale;
+        }); break;
         case "=":
-        case "+": setScale((s) => Math.min(3, s + 0.1)); break;
+        case "+": setScale((s) => {
+          const nextScale = Math.min(3, s + 0.1);
+          setOffset((current) => clampOffsetForScale(current, nextScale));
+          return nextScale;
+        }); break;
       }
     };
 
@@ -644,11 +686,42 @@ export function WorkloadTopologyPage() {
     setSelectedNodeId(`${node.kind}:${namespace}:${name}`);
   }
 
+  function clampOffsetForScale(nextOffset: { x: number; y: number }, nextScale: number) {
+    const viewportWidth = Math.min(canvasWidth, canvasSize.width / nextScale);
+    const viewportHeight = Math.min(canvasHeight, canvasSize.height / nextScale);
+    const canvasMaxX = Math.max(canvasWidth - viewportWidth, 0);
+    const canvasMaxY = Math.max(canvasHeight - viewportHeight, 0);
+    const hasContentBounds = Number.isFinite(viewportContentBounds.minX);
+    const viewportX = -nextOffset.x / nextScale;
+    const viewportY = -nextOffset.y / nextScale;
+
+    if (!hasContentBounds) {
+      return {
+        x: -clamp(viewportX, 0, canvasMaxX) * nextScale,
+        y: -clamp(viewportY, 0, canvasMaxY) * nextScale,
+      };
+    }
+
+    const minX = clamp(viewportContentBounds.minX - viewportContentPadding, 0, canvasMaxX);
+    const minY = clamp(viewportContentBounds.minY - viewportContentPadding, 0, canvasMaxY);
+    const maxX = clamp(viewportContentBounds.maxX + viewportContentPadding - viewportWidth, 0, canvasMaxX);
+    const maxY = clamp(viewportContentBounds.maxY + viewportContentPadding - viewportHeight, 0, canvasMaxY);
+    const centerX = (viewportContentBounds.minX + viewportContentBounds.maxX - viewportWidth) / 2;
+    const centerY = (viewportContentBounds.minY + viewportContentBounds.maxY - viewportHeight) / 2;
+    const clampedX = minX > maxX ? clamp(centerX, 0, canvasMaxX) : clamp(viewportX, minX, maxX);
+    const clampedY = minY > maxY ? clamp(centerY, 0, canvasMaxY) : clamp(viewportY, minY, maxY);
+
+    return {
+      x: -clampedX * nextScale,
+      y: -clampedY * nextScale,
+    };
+  }
+
   function navigateToCanvasPoint(x: number, y: number) {
-    setOffset({
+    setOffset(clampOffsetForScale({
       x: canvasSize.width / 2 - x * scale,
       y: canvasSize.height / 2 - y * scale
-    });
+    }, scale));
   }
 
   function nodeRelation(nodeId: string): "normal" | "connected" | "dimmed" {
@@ -692,17 +765,17 @@ export function WorkloadTopologyPage() {
       const canvasY = (pointerY - offset.y) / scale;
 
       setScale(nextScale);
-      setOffset({
+      setOffset(clampOffsetForScale({
         x: pointerX - canvasX * nextScale,
         y: pointerY - canvasY * nextScale
-      });
+      }, nextScale));
       return;
     }
 
-    setOffset((current) => ({
+    setOffset((current) => clampOffsetForScale({
       x: current.x - event.deltaX,
       y: current.y - event.deltaY
-    }));
+    }, scale));
   }
 
   const handleNodeSelect = React.useCallback((nodeId: string) => {
@@ -921,24 +994,20 @@ export function WorkloadTopologyPage() {
           <button type="button" className="WorkloadTopology__metricsHintClose" onClick={() => setMetricsHint(null)} aria-label="Dismiss">&times;</button>
           {metricsHint === "not-installed" ? (
             <>
-              <span>⚠ Metrics server not installed. Install and configure with:</span>
-              <code className="WorkloadTopology__metricsCmd" title="Click to copy install command" onClick={() => void copyText(METRICS_INSTALL_CMD)}>
-                {METRICS_INSTALL_CMD}
-              </code>
-              <span className="WorkloadTopology__metricsSubHint">For self-signed cert clusters, also run:</span>
-              <code className="WorkloadTopology__metricsCmd" title="Click to copy patch command" onClick={() => void copyText(METRICS_PATCH_CMD)}>
-                {METRICS_PATCH_CMD}
-              </code>
+              <span>⚠ Metrics API is not available in this cluster.</span>
+              <span className="WorkloadTopology__metricsSubHint">CPU and memory usage are hidden. Ask the cluster administrator to verify metrics-server and the cluster metrics policy.</span>
             </>
           ) : metricsHint === "forbidden" ? (
             <span>⚠ Metrics API access denied. Check your cluster RBAC permissions for <code>metrics.k8s.io</code> resources.</span>
+          ) : metricsHint === "api-unavailable" ? (
+            <>
+              <span>⚠ Metrics API is registered but unavailable. Check the metrics-server pod, service endpoints, and APIService status.</span>
+              <span className="WorkloadTopology__metricsSubHint">CPU and memory usage are hidden until the cluster metrics pipeline is healthy.</span>
+            </>
           ) : (
             <>
               <span>⚠ Metrics unavailable ({metricsHint})</span>
-              <span className="WorkloadTopology__metricsSubHint">If using self-signed certs, add <code>--kubelet-insecure-tls</code> to metrics-server:</span>
-              <code className="WorkloadTopology__metricsCmd" title="Click to copy" onClick={() => void copyText(METRICS_PATCH_CMD)}>
-                {METRICS_PATCH_CMD}
-              </code>
+              <span className="WorkloadTopology__metricsSubHint">CPU and memory usage are hidden. Check the cluster metrics API, RBAC, and metrics-server health.</span>
             </>
           )}
         </div>
@@ -1009,10 +1078,10 @@ export function WorkloadTopologyPage() {
               return;
             }
 
-            setOffset({
+            setOffset(clampOffsetForScale({
               x: dragStart.current.offsetX + event.clientX - dragStart.current.x,
               y: dragStart.current.offsetY + event.clientY - dragStart.current.y
-            });
+            }, scale));
           }}
           onMouseLeave={() => {
             dragStart.current = null;
@@ -1134,8 +1203,8 @@ export function WorkloadTopologyPage() {
             <button
               type="button"
               onClick={() => {
-                setOffset({ x: 0, y: 0 });
                 setScale(1);
+                setOffset(clampOffsetForScale({ x: 0, y: 0 }, 1));
               }}
               title="Reset View"
               style={{ width: "auto", padding: "0 8px", fontSize: "11px", fontWeight: 600 }}
@@ -1143,16 +1212,24 @@ export function WorkloadTopologyPage() {
               Reset
             </button>
             <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-              <button type="button" onClick={() => setScale((value) => Math.max(0.45, value - 0.1))}>-</button>
+              <button type="button" onClick={() => setScale((value) => {
+                const nextScale = Math.max(0.45, value - 0.1);
+                setOffset((current) => clampOffsetForScale(current, nextScale));
+                return nextScale;
+              })}>-</button>
               <span>{Math.round(scale * 100)}%</span>
-              <button type="button" onClick={() => setScale((value) => Math.min(1.8, value + 0.1))}>+</button>
+              <button type="button" onClick={() => setScale((value) => {
+                const nextScale = Math.min(1.8, value + 0.1);
+                setOffset((current) => clampOffsetForScale(current, nextScale));
+                return nextScale;
+              })}>+</button>
             </div>
           </div>
 
           <TopologyMinimap
             canvasHeight={canvasHeight}
             canvasSize={canvasSize}
-            nodes={showIssuesOnly ? topology.nodes.filter(n => issueNodeIds.has(n.id)) : topology.nodes}
+            nodes={visibleTopologyNodes}
             positions={resolvedPos}
             offset={offset}
             scale={scale}

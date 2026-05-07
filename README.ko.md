@@ -117,15 +117,7 @@ corepack pnpm pack
 
 Pod 툴팁에 실시간 CPU/메모리 사용량을 표시하려면 클러스터에 [metrics-server](https://github.com/kubernetes-sigs/metrics-server)가 실행 중이어야 합니다.
 
-```shell
-kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
-```
-
-자체 서명 인증서를 사용하는 로컬 클러스터(minikube, kind 등)의 경우:
-
-```shell
-kubectl patch deployment metrics-server -n kube-system --type='json' -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
-```
+이 확장은 클러스터 전역 metrics 구성 요소를 설치하거나 변경하지 않습니다. 운영 클러스터에서는 클러스터 관리자에게 metrics-server 배포 상태, APIService 상태, RBAC, 클러스터 보안 정책 확인을 요청하세요.
 
 metrics-server가 없어도 토폴로지는 CPU/메모리 데이터 없이 정상 동작합니다.
 

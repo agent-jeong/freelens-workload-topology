@@ -133,7 +133,7 @@ export type PodLogLine = {
   message: string;
   displayMessage: string;
   wrappedDisplayMessage: string;
-  severity: "error" | "warning" | "info" | "debug" | "unknown";
+  severity: "error" | "warning" | "info" | "debug" | "trace" | "unknown";
   error?: boolean;
 };
 
