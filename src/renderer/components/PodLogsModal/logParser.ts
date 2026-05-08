@@ -292,8 +292,22 @@ export function parsedLogDisplay(value: string): Pick<PodLogLine, "displayMessag
   };
 }
 
+function timestampMsFromValue(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const normalized = value.includes(" ") && !value.includes("T")
+    ? value.replace(" ", "T")
+    : value;
+  const ms = Date.parse(normalized);
+
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
 export function logLines(entries: PodLogEntry[]): PodLogLine[] {
-  const lines: PodLogLine[] = entries.flatMap((entry, sourceIndex): PodLogLine[] => {
+  let order = 0;
+  const lines: Array<PodLogLine & { order: number }> = entries.flatMap((entry, sourceIndex): Array<PodLogLine & { order: number }> => {
     if (entry.error) {
       return [{
         id: `${entry.namespace}:${entry.podName}:${entry.containerName}:error`,
@@ -301,11 +315,13 @@ export function logLines(entries: PodLogEntry[]): PodLogLine[] {
         containerName: entry.containerName,
         sourceIndex,
         timestamp: undefined,
+        timestampMs: undefined,
         message: entry.error,
         displayMessage: entry.error,
         wrappedDisplayMessage: entry.error,
         severity: "error",
-        error: true
+        error: true,
+        order: order++
       }];
     }
 
@@ -328,21 +344,27 @@ export function logLines(entries: PodLogEntry[]): PodLogLine[] {
         containerName: entry.containerName,
         sourceIndex,
         timestamp,
+        timestampMs: timestampMsFromValue(timestamp),
         message: parsed.message,
         displayMessage: display.displayMessage,
         wrappedDisplayMessage: display.wrappedDisplayMessage,
-        severity: display.severity === "unknown" ? detectLogSeverity(parsed.message) : display.severity
+        severity: display.severity === "unknown" ? detectLogSeverity(parsed.message) : display.severity,
+        order: order++
       };
     });
   });
 
   return lines.sort((a, b) => {
-    if (!a.timestamp || !b.timestamp) {
-      return 0;
+    if (a.timestampMs !== undefined && b.timestampMs !== undefined && a.timestampMs !== b.timestampMs) {
+      return a.timestampMs - b.timestampMs;
     }
 
-    return a.timestamp.localeCompare(b.timestamp);
-  });
+    if (a.timestamp && b.timestamp && a.timestamp !== b.timestamp) {
+      return a.timestamp.localeCompare(b.timestamp);
+    }
+
+    return a.order - b.order;
+  }).map(({ order: _order, ...line }) => line);
 }
 
 export function cleanLogMessage(value: string): string {

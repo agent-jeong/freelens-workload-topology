@@ -10,6 +10,7 @@ export function VirtualLogList({
   wrapLogs,
   logBodyRef,
   lineRefs,
+  scrollRequest,
   onExclude,
 }: {
   lines: PodLogLine[];
@@ -18,6 +19,7 @@ export function VirtualLogList({
   wrapLogs: boolean;
   logBodyRef: React.MutableRefObject<HTMLDivElement | null>;
   lineRefs: React.MutableRefObject<Array<HTMLDivElement | null>>;
+  scrollRequest?: { edge: "top" | "bottom"; tick: number } | null;
   onExclude: (line: PodLogLine) => void;
 }) {
   const [scrollTop, setScrollTop] = useState(0);
@@ -26,6 +28,7 @@ export function VirtualLogList({
   const [heightVersion, setHeightVersion] = useState(0);
   const measuredHeightsRef = useRef<number[]>([]);
   const lastWrapWidthRef = useRef<number | null>(null);
+  const handledScrollTickRef = useRef<number | null>(null);
 
   useEffect(() => {
     const el = logBodyRef.current;
@@ -86,6 +89,25 @@ export function VirtualLogList({
   }, [lines, wrapLogs, heightVersion]);
 
   const totalHeight = itemOffsets[lines.length] ?? 0;
+
+  useEffect(() => {
+    const el = logBodyRef.current;
+
+    if (!el || !scrollRequest || lines.length === 0 || handledScrollTickRef.current === scrollRequest.tick) {
+      return;
+    }
+
+    handledScrollTickRef.current = scrollRequest.tick;
+
+    requestAnimationFrame(() => {
+      const nextTop = scrollRequest.edge === "bottom"
+        ? Math.max(totalHeight - containerHeight, 0)
+        : 0;
+
+      el.scrollTop = nextTop;
+      setScrollTop(nextTop);
+    });
+  }, [scrollRequest?.tick, scrollRequest?.edge, totalHeight, containerHeight, lines.length, logBodyRef]);
 
   const findIndexForOffset = (offset: number) => {
     let low = 0;

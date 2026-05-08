@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Renderer } from "@freelensapp/extensions";
-import type { KubeObjectLike, PodLogEntry, PodLogOptions, TopologyNode } from "../../types";
+import type { KubeObjectLike, PodLogEntry, PodLogLine, PodLogOptions, TopologyNode } from "../../types";
 import { getName, getNamespace } from "../../utils/kube";
 import { VirtualLogList } from "./VirtualLogList";
 import { logLines, logMessageKey, podLogTargets } from "./logParser";
@@ -8,14 +8,23 @@ import { logLines, logMessageKey, podLogTargets } from "./logParser";
 const { K8sApi } = Renderer;
 
 const LOG_BUFFER_LINES = 20000;
-const RANGE_LINE_LIMIT_OPTIONS = [100000, 200000, 500000] as const;
+const RANGE_LINE_LIMIT_OPTIONS = [100000, 200000, 500000, 0] as const;
+type RangeLineLimit = (typeof RANGE_LINE_LIMIT_OPTIONS)[number];
+const LOAD_OLDER_STEPS = [100, 300, 1000, 3000, 10000, 30000, 100000, 200000, 500000] as const;
+const LOG_FETCH_CONCURRENCY = 6;
 const RANGE_FETCH_CONCURRENCY = 3;
 const RANGE_LIMIT_BYTES_PER_STREAM = 25 * 1024 * 1024;
+const LOG_TIMESTAMP_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[^\s]*)\s/;
 
 type PodLogFetchOptions = PodLogOptions & {
   limitBytes?: number;
   signal?: AbortSignal;
   sinceTime?: string;
+};
+
+type RangeLineResult = {
+  count: number;
+  lines: PodLogLine[];
 };
 
 function toDateTimeLocalValue(date: Date): string {
@@ -34,22 +43,195 @@ function parseDateTimeLocal(value: string): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+function lineLimitLabel(value: RangeLineLimit): string {
+  return value === 0 ? "No limit" : value.toLocaleString();
+}
+
+function nextOlderTail(current: number, maxLines: RangeLineLimit): number | null {
+  const steps = maxLines === 0
+    ? LOAD_OLDER_STEPS
+    : LOAD_OLDER_STEPS.filter((value) => value <= maxLines);
+
+  return steps.find((value) => value > current) ?? null;
+}
+
+function tailLinesPerStream(totalTailLines: number, streamCount: number): number {
+  return Math.max(1, Math.ceil(totalTailLines / Math.max(streamCount, 1)));
+}
+
+function latestTimestampFromText(text: string, initial = ""): string {
+  let latest = initial;
+  let start = 0;
+
+  while (start < text.length) {
+    const end = text.indexOf("\n", start);
+    const line = end === -1 ? text.slice(start) : text.slice(start, end);
+    const ts = LOG_TIMESTAMP_RE.exec(line)?.[1];
+
+    if (ts && ts > latest) {
+      latest = ts;
+    }
+
+    if (end === -1) {
+      break;
+    }
+
+    start = end + 1;
+  }
+
+  return latest;
+}
+
+function lastLogLine(text: string): string {
+  const trimmed = text.trimEnd();
+  const index = trimmed.lastIndexOf("\n");
+
+  return index === -1 ? trimmed : trimmed.slice(index + 1);
+}
+
+function countNonEmptyLines(text: string): number {
+  let count = 0;
+  let lineEnd = 0;
+
+  for (let index = 0; index <= text.length; index += 1) {
+    if (index < text.length && text.charCodeAt(index) !== 10) {
+      continue;
+    }
+
+    if (text.slice(lineEnd, index).trim().length > 0) {
+      count += 1;
+    }
+
+    lineEnd = index + 1;
+  }
+
+  return count;
+}
+
+function countEntryLines(entries: PodLogEntry[]): number {
+  return entries.reduce((total, entry) => total + (entry.error ? 0 : countNonEmptyLines(entry.text)), 0);
+}
+
+function hasPotentialOlderLogs(entries: PodLogEntry[], requestedTailLines?: number): boolean {
+  if (typeof requestedTailLines !== "number") {
+    return false;
+  }
+
+  return entries.some((entry) => !entry.error && countNonEmptyLines(entry.text) >= requestedTailLines);
+}
+
+function trimTextToLastNonEmptyLines(text: string, maxLines: number): string {
+  let count = 0;
+  let lineEnd = text.length;
+
+  for (let index = text.length - 1; index >= -1; index -= 1) {
+    if (index !== -1 && text.charCodeAt(index) !== 10) {
+      continue;
+    }
+
+    const lineStart = index + 1;
+    const line = text.slice(lineStart, lineEnd);
+
+    if (line.trim().length > 0) {
+      count += 1;
+
+      if (count > maxLines) {
+        return text.slice(lineStart);
+      }
+    }
+
+    lineEnd = index;
+  }
+
+  return text;
+}
+
 function trimEntriesToLineLimit(entries: PodLogEntry[], maxLines: number): PodLogEntry[] {
   if (entries.length === 0) {
     return entries;
   }
 
-  const maxPerEntry = Math.max(1, Math.ceil(maxLines / entries.length));
+  const baseLimit = Math.floor(maxLines / entries.length);
+  const remainder = maxLines % entries.length;
 
-  return entries.map((entry) => {
-    const lines = entry.text.split("\n").filter((line) => line.trim().length > 0);
-
-    if (entry.error || lines.length <= maxPerEntry) {
+  return entries.map((entry, index) => {
+    if (entry.error) {
       return entry;
     }
 
-    return { ...entry, text: lines.slice(-maxPerEntry).join("\n") };
+    const entryLimit = baseLimit + (index < remainder ? 1 : 0);
+
+    if (entryLimit <= 0) {
+      return { ...entry, text: "" };
+    }
+
+    const trimmed = trimTextToLastNonEmptyLines(entry.text, entryLimit);
+
+    return trimmed === entry.text ? entry : { ...entry, text: trimmed };
   });
+}
+
+function collectRangeLines(
+  lines: PodLogLine[],
+  bounds: { fromMs: number; toMs: number },
+  edge: "earliest" | "latest",
+  limit: RangeLineLimit
+): RangeLineResult {
+  let count = 0;
+
+  if (limit === 0) {
+    const matched: PodLogLine[] = [];
+
+    for (const line of lines) {
+      const value = line.timestampMs;
+
+      if (value !== undefined && value >= bounds.fromMs && value <= bounds.toMs) {
+        count += 1;
+        matched.push(line);
+      }
+    }
+
+    return { count, lines: matched };
+  }
+
+  if (edge === "earliest") {
+    const matched: PodLogLine[] = [];
+
+    for (const line of lines) {
+      const value = line.timestampMs;
+
+      if (value !== undefined && value >= bounds.fromMs && value <= bounds.toMs) {
+        count += 1;
+
+        if (matched.length < limit) {
+          matched.push(line);
+        }
+      }
+    }
+
+    return { count, lines: matched };
+  }
+
+  const buffer = new Array<PodLogLine>(limit);
+  let cursor = 0;
+  let size = 0;
+
+  for (const line of lines) {
+    const value = line.timestampMs;
+
+    if (value !== undefined && value >= bounds.fromMs && value <= bounds.toMs) {
+      count += 1;
+      buffer[cursor] = line;
+      cursor = (cursor + 1) % limit;
+      size = Math.min(size + 1, limit);
+    }
+  }
+
+  if (size < limit) {
+    return { count, lines: buffer.slice(0, size) };
+  }
+
+  return { count, lines: [...buffer.slice(cursor), ...buffer.slice(0, cursor)] };
 }
 
 async function mapWithConcurrency<T, R>(items: T[], limit: number, worker: (item: T, index: number) => Promise<R>): Promise<R[]> {
@@ -88,7 +270,7 @@ async function fetchPodLogEntry(pod: KubeObjectLike, containerName: string, opti
 
     if (options.sinceTime) {
       params.set("sinceTime", options.sinceTime);
-    } else {
+    } else if (typeof options.tailLines === "number") {
       params.set("tailLines", String(options.tailLines));
     }
 
@@ -134,6 +316,10 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
   const [loading, setLoading] = useState(true);
   const [limitMessage, setLimitMessage] = useState<string | null>(null);
   const [tailLines, setTailLines] = useState(300);
+  const [loadedTailLines, setLoadedTailLines] = useState(300);
+  const [tailNoLimit, setTailNoLimit] = useState(false);
+  const [olderMessage, setOlderMessage] = useState<string | null>(null);
+  const [olderExhausted, setOlderExhausted] = useState(false);
   const [live, setLive] = useState(true);
   const [previous, setPrevious] = useState(false);
   const [query, setQuery] = useState("");
@@ -142,6 +328,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
   const [podFilterOpen, setPodFilterOpen] = useState(false);
   const [hiddenFilterOpen, setHiddenFilterOpen] = useState(false);
   const [selectedContainer, setSelectedContainer] = useState("all");
+  const [containerFilterOpen, setContainerFilterOpen] = useState(false);
   const [selectedSeverities, setSelectedSeverities] = useState<Set<string>>(new Set());
   const [severityFilterOpen, setSeverityFilterOpen] = useState(false);
   const [wrapLogs, setWrapLogs] = useState(false);
@@ -155,14 +342,22 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
   const [rangeLoading, setRangeLoading] = useState(false);
   const [rangeBounds, setRangeBounds] = useState<{ fromMs: number; toMs: number; label: string } | null>(null);
   const [appliedRangeResultEdge, setAppliedRangeResultEdge] = useState<"earliest" | "latest">("earliest");
-  const [appliedRangeLineLimit, setAppliedRangeLineLimit] = useState<(typeof RANGE_LINE_LIMIT_OPTIONS)[number]>(100000);
+  const [appliedRangeLineLimit, setAppliedRangeLineLimit] = useState<RangeLineLimit>(100000);
   const [rangeResultEdge, setRangeResultEdge] = useState<"earliest" | "latest">("earliest");
-  const [rangeLineLimit, setRangeLineLimit] = useState<(typeof RANGE_LINE_LIMIT_OPTIONS)[number]>(100000);
+  const [rangeLineLimit, setRangeLineLimit] = useState<RangeLineLimit>(100000);
   const [rangeMessage, setRangeMessage] = useState<string | null>(null);
   const logBodyRef = useRef<HTMLDivElement | null>(null);
   const lineRefs = useRef<Array<HTMLDivElement | null>>([]);
   const lastTimestampRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const olderBaselineLineCountRef = useRef<number | null>(null);
+  const olderLoadRequestedRef = useRef(false);
+  const rangeLineLimitRef = useRef<RangeLineLimit>(rangeLineLimit);
+  const [rangeScrollRequest, setRangeScrollRequest] = useState<{ edge: "top" | "bottom"; tick: number } | null>(null);
+
+  useEffect(() => {
+    rangeLineLimitRef.current = rangeLineLimit;
+  }, [rangeLineLimit]);
 
   useEffect(() => {
     if (rangeActive) {
@@ -175,6 +370,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
 
     setLimitMessage(targets.length > visibleTargets.length ? `Showing first ${visibleTargets.length} of ${targets.length} log streams.` : null);
     lastTimestampRef.current = null;
+    const requestedTailLines = tailNoLimit ? undefined : tailLinesPerStream(loadedTailLines, visibleTargets.length);
 
     async function loadLogs(showLoading: boolean) {
       if (showLoading) {
@@ -182,18 +378,46 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
         setEntries([]);
       }
 
-      const loadedEntries = await Promise.all(visibleTargets.map(({ pod, containerName }) => fetchPodLogEntry(pod, containerName, { tailLines, previous })));
+      const loadedEntries = await mapWithConcurrency(
+        visibleTargets,
+        LOG_FETCH_CONCURRENCY,
+        ({ pod, containerName }) => fetchPodLogEntry(pod, containerName, { tailLines: requestedTailLines, previous })
+      );
 
       if (!cancelled) {
-        setEntries(trimEntriesToLineLimit(loadedEntries, LOG_BUFFER_LINES));
+        const currentLineLimit = rangeLineLimitRef.current;
+        const maxLoadedLines = currentLineLimit === 0 ? null : Math.min(currentLineLimit, Math.max(LOG_BUFFER_LINES, loadedTailLines));
+        const nextEntries = maxLoadedLines ? trimEntriesToLineLimit(loadedEntries, maxLoadedLines) : loadedEntries;
+        const isOlderLoad = olderLoadRequestedRef.current;
+        const nextLineCount = isOlderLoad ? countEntryLines(nextEntries) : 0;
+        const baselineLineCount = olderBaselineLineCountRef.current;
+        const canLoadMoreOlder = isOlderLoad ? hasPotentialOlderLogs(loadedEntries, requestedTailLines) : true;
+
+        setEntries(nextEntries);
         setLoading(false);
+
+        if (tailNoLimit) {
+          setOlderExhausted(true);
+          setOlderMessage("Loaded all available logs.");
+        } else if (isOlderLoad && baselineLineCount !== null && nextLineCount <= baselineLineCount) {
+          setOlderExhausted(true);
+          setOlderMessage("All available logs are already loaded.");
+        } else if (isOlderLoad && !canLoadMoreOlder) {
+          setOlderExhausted(true);
+          setOlderMessage("Loaded all available logs.");
+        } else {
+          setOlderExhausted(false);
+          if (!isOlderLoad) {
+            setOlderMessage(null);
+          }
+        }
+
+        olderBaselineLineCountRef.current = null;
+        olderLoadRequestedRef.current = false;
 
         let latest = "";
         for (const entry of loadedEntries) {
-          for (const line of entry.text.split("\n")) {
-            const ts = line.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[^\s]*)\s/)?.[1];
-            if (ts && ts > latest) latest = ts;
-          }
+          latest = latestTimestampFromText(entry.text, latest);
         }
         if (latest) lastTimestampRef.current = latest;
       }
@@ -206,16 +430,17 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
         return;
       }
 
-      const newEntries = await Promise.all(visibleTargets.map(({ pod, containerName }) => fetchPodLogEntry(pod, containerName, { tailLines, previous, sinceTime })));
+      const newEntries = await mapWithConcurrency(
+        visibleTargets,
+        LOG_FETCH_CONCURRENCY,
+        ({ pod, containerName }) => fetchPodLogEntry(pod, containerName, { tailLines: requestedTailLines, previous, sinceTime })
+      );
 
       if (cancelled) return;
 
       let latest = sinceTime;
       for (const entry of newEntries) {
-        for (const line of entry.text.split("\n")) {
-          const ts = line.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[^\s]*)\s/)?.[1];
-          if (ts && ts > latest) latest = ts;
-        }
+        latest = latestTimestampFromText(entry.text, latest);
       }
       if (latest > sinceTime) lastTimestampRef.current = latest;
 
@@ -226,8 +451,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
         const newEntry = newEntries[i];
         if (!newEntry || !newEntry.text.trim()) return existing;
 
-        const existingLines = existing.text.split("\n");
-        const lastExistingLine = existingLines[existingLines.length - 1] || existingLines[existingLines.length - 2] || "";
+        const lastExistingLine = lastLogLine(existing.text);
         const newLines = newEntry.text.split("\n").filter((line) => line.trim() && line > lastExistingLine);
 
         if (newLines.length === 0) return existing;
@@ -237,7 +461,11 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
           text: existing.text + "\n" + newLines.join("\n")
         };
       }));
-      setEntries((current) => trimEntriesToLineLimit(current, LOG_BUFFER_LINES));
+      setEntries((current) => {
+        const currentLineLimit = rangeLineLimitRef.current;
+        const maxLoadedLines = currentLineLimit === 0 ? null : Math.min(currentLineLimit, Math.max(LOG_BUFFER_LINES, loadedTailLines));
+        return maxLoadedLines ? trimEntriesToLineLimit(current, maxLoadedLines) : current;
+      });
     }
 
     void loadLogs(true);
@@ -254,7 +482,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
     return () => {
       cancelled = true;
     };
-  }, [node.id, tailLines, live, previous, rangeActive]);
+  }, [node.id, loadedTailLines, tailNoLimit, live, previous, rangeActive]);
 
   useEffect(() => {
     return () => {
@@ -275,32 +503,23 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
   }, [query]);
 
   const parsedLines = useMemo(() => logLines(entries), [entries]);
-  const rangeLines = useMemo(() => {
+  const rangeResult = useMemo<RangeLineResult | null>(() => {
     if (!rangeBounds) {
       return null;
     }
 
-    return parsedLines.filter((line) => {
-      if (!line.timestamp) {
-        return false;
-      }
-
-      const value = new Date(line.timestamp).getTime();
-
-      return Number.isFinite(value) && value >= rangeBounds.fromMs && value <= rangeBounds.toMs;
-    });
-  }, [parsedLines, rangeBounds]);
+    return collectRangeLines(parsedLines, rangeBounds, appliedRangeResultEdge, appliedRangeLineLimit);
+  }, [parsedLines, rangeBounds, appliedRangeResultEdge, appliedRangeLineLimit]);
   const allLines = useMemo(() => {
-    if (!rangeLines) {
+    if (!rangeResult) {
       return parsedLines;
     }
 
-    return appliedRangeResultEdge === "latest"
-      ? rangeLines.slice(-appliedRangeLineLimit)
-      : rangeLines.slice(0, appliedRangeLineLimit);
-  }, [parsedLines, rangeLines, appliedRangeResultEdge, appliedRangeLineLimit]);
-  const rangeLineCount = rangeLines?.length ?? null;
-  const rangeOverflow = Boolean(rangeLineCount !== null && rangeLineCount > appliedRangeLineLimit);
+    return rangeResult.lines;
+  }, [parsedLines, rangeResult]);
+  const rangeLineCount = rangeResult?.count ?? null;
+  const rangeOverflow = Boolean(appliedRangeLineLimit > 0 && rangeLineCount !== null && rangeLineCount > appliedRangeLineLimit);
+  const rangeMaxHasPendingChanges = Boolean(rangeBounds && rangeLineLimit !== appliedRangeLineLimit);
   const rangeHasPendingChanges = Boolean(rangeBounds && (
     rangeResultEdge !== appliedRangeResultEdge ||
     rangeLineLimit !== appliedRangeLineLimit ||
@@ -309,47 +528,46 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
   ));
   const podOptions = useMemo(() => [...new Set(allLines.map((line) => line.podName))].sort(), [allLines]);
   const containerOptions = useMemo(() => [...new Set(allLines.map((line) => line.containerName))].sort(), [allLines]);
-  const searchableLines = useMemo(() => allLines.map((line) => ({
-    line,
-    lower: `${line.message}\t${line.podName}\t${line.containerName}\t${line.timestamp ?? ""}`.toLowerCase(),
-  })), [allLines]);
 
   const filteredLines = useMemo(() => {
     const normalizedQuery = debouncedQuery.trim().toLowerCase();
 
-    let lines = searchableLines;
+    let lines = allLines;
 
     if (excludedMessages.size > 0) {
-      lines = lines.filter(({ line }) => !excludedMessages.has(logMessageKey(line)));
+      lines = lines.filter((line) => !excludedMessages.has(logMessageKey(line)));
     }
 
     if (selectedPods.length > 0) {
-      lines = lines.filter(({ line }) => selectedPods.includes(line.podName));
+      lines = lines.filter((line) => selectedPods.includes(line.podName));
     }
 
     if (selectedContainer !== "all") {
-      lines = lines.filter(({ line }) => line.containerName === selectedContainer);
+      lines = lines.filter((line) => line.containerName === selectedContainer);
     }
 
     if (selectedSeverities.size > 0) {
-      lines = lines.filter(({ line }) => selectedSeverities.has(line.severity));
+      lines = lines.filter((line) => selectedSeverities.has(line.severity));
     }
 
     if (normalizedQuery) {
-      lines = lines.filter(({ lower }) => lower.includes(normalizedQuery));
+      lines = lines.filter((line) => `${line.message}\t${line.podName}\t${line.containerName}\t${line.timestamp ?? ""}`.toLowerCase().includes(normalizedQuery));
     }
 
-    return lines.map(({ line }) => line);
-  }, [searchableLines, debouncedQuery, selectedPods, selectedContainer, selectedSeverities, excludedMessages]);
+    return lines;
+  }, [allLines, debouncedQuery, selectedPods, selectedContainer, selectedSeverities, excludedMessages]);
 
   const matchCount = debouncedQuery.trim() ? filteredLines.length : 0;
   const selectedMatchText = matchCount > 0 ? `${selectedMatchIndex + 1} / ${matchCount}` : debouncedQuery.trim() ? "0 / 0" : `${filteredLines.length} lines`;
   const podFilterLabel = selectedPods.length === 0 ? "All pods" : selectedPods.length === 1 ? selectedPods[0] : `${selectedPods.length} pods`;
+  const containerFilterLabel = selectedContainer === "all" ? "All containers" : selectedContainer;
   const hiddenMessages = useMemo(() => [...excludedMessages].sort(), [excludedMessages]);
+  const nextOlderTailLines = nextOlderTail(loadedTailLines, rangeLineLimit);
+  const canLoadOlder = !loading && !olderExhausted && !tailNoLimit && Boolean(nextOlderTailLines || rangeLineLimit === 0);
 
   useEffect(() => {
     setSelectedMatchIndex(0);
-  }, [query, selectedPods, selectedContainer, selectedSeverities, rangeBounds]);
+  }, [query, selectedPods, selectedContainer, selectedSeverities, rangeBounds, appliedRangeResultEdge, appliedRangeLineLimit]);
 
   useEffect(() => {
     if (selectedMatchIndex >= filteredLines.length) {
@@ -416,6 +634,69 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
     setLoading(true);
   }
 
+  function loadOlderLogs() {
+    if (rangeActive || loading || olderExhausted) {
+      return;
+    }
+
+    setLive(false);
+    setAutoScroll(false);
+
+    if (nextOlderTailLines) {
+      olderBaselineLineCountRef.current = countEntryLines(entries);
+      olderLoadRequestedRef.current = true;
+      setOlderExhausted(false);
+      setTailNoLimit(false);
+      setLoadedTailLines(nextOlderTailLines);
+      setOlderMessage(`Loading older logs with tail ${nextOlderTailLines.toLocaleString()} / max ${lineLimitLabel(rangeLineLimit)}.`);
+      return;
+    }
+
+    if (rangeLineLimit === 0 && !tailNoLimit) {
+      const confirmed = window.confirm("This may load all available logs from the selected streams and use significant memory. Continue?");
+
+      if (!confirmed) {
+        return;
+      }
+
+      olderBaselineLineCountRef.current = countEntryLines(entries);
+      olderLoadRequestedRef.current = true;
+      setOlderExhausted(false);
+      setTailNoLimit(true);
+      setOlderMessage("Loading all available logs.");
+      return;
+    }
+
+    setOlderMessage(`Reached max ${lineLimitLabel(rangeLineLimit)}.`);
+  }
+
+  function applyMaxLineLimit(nextLimit: RangeLineLimit) {
+    setOlderExhausted(false);
+    setRangeLineLimit(nextLimit);
+
+    if (rangeActive || nextLimit === 0) {
+      return;
+    }
+
+    setEntries((current) => {
+      const maxLoadedLines = Math.min(nextLimit, Math.max(LOG_BUFFER_LINES, loadedTailLines));
+
+      return trimEntriesToLineLimit(current, maxLoadedLines);
+    });
+
+    if (loadedTailLines > nextLimit) {
+      setLoadedTailLines(nextLimit);
+    }
+  }
+
+  function rangeEdgeButtonClass(edge: "earliest" | "latest") {
+    if (rangeResultEdge !== edge) {
+      return "";
+    }
+
+    return rangeBounds && rangeResultEdge !== appliedRangeResultEdge ? "is-pending" : "is-active";
+  }
+
   async function applyRange() {
     const fromDate = parseDateTimeLocal(rangeFrom);
     const toDate = parseDateTimeLocal(rangeTo);
@@ -433,6 +714,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
     if (rangeBounds && fromDate.getTime() === rangeBounds.fromMs && toDate.getTime() === rangeBounds.toMs) {
       setAppliedRangeResultEdge(rangeResultEdge);
       setAppliedRangeLineLimit(rangeLineLimit);
+      setRangeScrollRequest({ edge: rangeResultEdge === "latest" ? "bottom" : "top", tick: Date.now() });
       setRangeMessage(null);
       return;
     }
@@ -486,6 +768,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
       });
       setAppliedRangeResultEdge(rangeResultEdge);
       setAppliedRangeLineLimit(rangeLineLimit);
+      setRangeScrollRequest({ edge: rangeResultEdge === "latest" ? "bottom" : "top", tick: Date.now() });
       setRangeMessage(null);
     } catch (error) {
       if (controller.signal.aborted) {
@@ -572,11 +855,28 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
         <div className="PodLogsModal__toolbar">
           <label>
             <span>Tail</span>
-            <select value={tailLines} disabled={rangeActive} onChange={(event) => setTailLines(Number(event.target.value))}>
+            <select value={tailLines} disabled={rangeActive} onChange={(event) => {
+              const nextTail = Number(event.target.value);
+              setTailNoLimit(false);
+              setOlderExhausted(false);
+              setTailLines(nextTail);
+              setLoadedTailLines(nextTail);
+              setOlderMessage(null);
+            }}>
               <option value={100}>100</option>
               <option value={300}>300</option>
               <option value={1000}>1000</option>
               <option value={5000}>5000</option>
+            </select>
+          </label>
+          <label className={`PodLogsModal__maxControl${rangeMaxHasPendingChanges ? " is-pending" : ""}`} title="Maximum lines kept for range results and older log loading">
+            <span>Max</span>
+            <select value={rangeLineLimit} disabled={rangeLoading} onChange={(event) => {
+              applyMaxLineLimit(Number(event.target.value) as RangeLineLimit);
+            }}>
+              {RANGE_LINE_LIMIT_OPTIONS.map((value) => (
+                <option key={value} value={value}>{lineLimitLabel(value)}</option>
+              ))}
             </select>
           </label>
           <button type="button" className={live && !previous && !rangeActive ? "is-active" : ""} disabled={previous || rangeActive} onClick={() => setLive((value) => !value)}>
@@ -623,21 +923,13 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
                 <div className="PodLogsModal__rangeMode">
                   <span>When capped</span>
                   <div>
-                    <button type="button" className={rangeResultEdge === "earliest" ? "is-active" : ""} onClick={() => setRangeResultEdge("earliest")}>Earliest</button>
-                    <button type="button" className={rangeResultEdge === "latest" ? "is-active" : ""} onClick={() => setRangeResultEdge("latest")}>Latest</button>
+                    <button type="button" className={rangeEdgeButtonClass("earliest")} onClick={() => setRangeResultEdge("earliest")}>Earliest</button>
+                    <button type="button" className={rangeEdgeButtonClass("latest")} onClick={() => setRangeResultEdge("latest")}>Latest</button>
                   </div>
                 </div>
-                <label className="PodLogsModal__rangeField">
-                  <span>Max</span>
-                  <select value={rangeLineLimit} disabled={rangeLoading} onChange={(event) => setRangeLineLimit(Number(event.target.value) as (typeof RANGE_LINE_LIMIT_OPTIONS)[number])}>
-                    {RANGE_LINE_LIMIT_OPTIONS.map((value) => (
-                      <option key={value} value={value}>{value.toLocaleString()}</option>
-                    ))}
-                  </select>
-                </label>
                 <div className="PodLogsModal__rangeHint">
-                  Kubernetes supports start time only. End time is filtered locally.
-                  {rangeLineLimit >= 500000 ? " 500,000 lines may use more memory and slow search/filtering." : ""}
+                  Kubernetes supports start time only. End time is filtered locally. Max is set in the log toolbar.
+                  {rangeLineLimit === 0 ? " No limit may use significant memory and slow search/filtering." : rangeLineLimit >= 500000 ? " 500,000 lines may use more memory and slow search/filtering." : ""}
                 </div>
                 <div className="PodLogsModal__rangeActions">
                   {rangeLoading ? (
@@ -700,13 +992,38 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
               </div>
             ) : null}
           </div>
-          <label>
+          <div className="PodLogsModal__containerFilter">
             <span>Container</span>
-            <select value={selectedContainer} onChange={(event) => setSelectedContainer(event.target.value)}>
-              <option value="all">All containers</option>
-              {containerOptions.map((containerName) => <option key={containerName} value={containerName}>{containerName}</option>)}
-            </select>
-          </label>
+            <button type="button" title={containerFilterLabel} onClick={() => setContainerFilterOpen((value) => !value)}>{containerFilterLabel}</button>
+            {containerFilterOpen ? (
+              <div className="PodLogsModal__containerMenu">
+                <button
+                  type="button"
+                  className={selectedContainer === "all" ? "is-selected" : ""}
+                  onClick={() => {
+                    setSelectedContainer("all");
+                    setContainerFilterOpen(false);
+                  }}
+                >
+                  All containers
+                </button>
+                {containerOptions.map((containerName) => (
+                  <button
+                    key={containerName}
+                    type="button"
+                    className={selectedContainer === containerName ? "is-selected" : ""}
+                    title={containerName}
+                    onClick={() => {
+                      setSelectedContainer(containerName);
+                      setContainerFilterOpen(false);
+                    }}
+                  >
+                    {containerName}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
           <div className="PodLogsModal__severityFilter">
             <span>Log Level</span>
             <button type="button" className={selectedSeverities.size > 0 ? "is-active" : ""} onClick={() => setSeverityFilterOpen((v) => !v)}>
@@ -759,6 +1076,15 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
           <span className="PodLogsModal__count">{selectedMatchText}</span>
         </div>
         {limitMessage ? <div className="PodLogsModal__notice">{limitMessage}</div> : null}
+        {!rangeActive ? (
+          <div className="PodLogsModal__olderBar">
+            <button type="button" disabled={!canLoadOlder} onClick={loadOlderLogs}>
+              {olderExhausted || tailNoLimit ? "All available logs loaded" : nextOlderTailLines ? "Load older logs" : rangeLineLimit === 0 ? "Load all available logs" : "Reached max lines"}
+            </button>
+            <span>Loaded {tailNoLimit ? "All available" : loadedTailLines.toLocaleString()} / Max {lineLimitLabel(rangeLineLimit)}</span>
+          </div>
+        ) : null}
+        {olderMessage && !rangeActive ? <div className="PodLogsModal__notice">{olderMessage}</div> : null}
         {rangeBounds ? <div className="PodLogsModal__notice">Range {rangeBounds.label} · {(rangeLineCount ?? allLines.length).toLocaleString()} lines in range</div> : null}
         {rangeOverflow ? <div className="PodLogsModal__notice">More than {appliedRangeLineLimit.toLocaleString()} lines matched. Showing {appliedRangeResultEdge} lines.</div> : null}
         {rangeMessage ? <div className="PodLogsModal__notice">{rangeMessage}</div> : null}
@@ -774,6 +1100,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
             wrapLogs={wrapLogs}
             logBodyRef={logBodyRef}
             lineRefs={lineRefs}
+            scrollRequest={rangeScrollRequest}
             onExclude={(line) => setExcludedMessages((prev) => {
               const next = new Set(prev);
               next.add(logMessageKey(line));

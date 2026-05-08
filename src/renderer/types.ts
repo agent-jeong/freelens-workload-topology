@@ -120,7 +120,7 @@ export type PodLogEntry = {
 };
 
 export type PodLogOptions = {
-  tailLines: number;
+  tailLines?: number;
   previous: boolean;
 };
 
@@ -130,6 +130,7 @@ export type PodLogLine = {
   containerName: string;
   sourceIndex: number;
   timestamp?: string;
+  timestampMs?: number;
   message: string;
   displayMessage: string;
   wrappedDisplayMessage: string;

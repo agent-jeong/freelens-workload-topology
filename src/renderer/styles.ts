@@ -2233,8 +2233,30 @@ export const topologyStyles = `
   font-size: 12px;
 }
 
+.PodLogsModal__maxControl {
+  padding: 0 8px;
+  height: 30px;
+  border: 1px solid var(--borderColor);
+  border-radius: 4px;
+  background: rgba(160, 170, 180, 0.06);
+}
+
+.PodLogsModal__maxControl.is-pending {
+  border-color: rgba(217, 155, 32, 0.65);
+  background: rgba(217, 155, 32, 0.08);
+}
+
+.PodLogsModal__maxControl select {
+  color: var(--textColorPrimary);
+  background: transparent;
+  border: 0;
+  outline: none;
+  font-size: 12px;
+}
+
 .PodLogsModal__podFilter,
 .PodLogsModal__hiddenFilter,
+.PodLogsModal__containerFilter,
 .PodLogsModal__severityFilter,
 .PodLogsModal__rangeFilter {
   position: relative;
@@ -2247,6 +2269,7 @@ export const topologyStyles = `
 
 .PodLogsModal__podFilter > button,
 .PodLogsModal__hiddenFilter > button,
+.PodLogsModal__containerFilter > button,
 .PodLogsModal__severityFilter > button,
 .PodLogsModal__rangeFilter > button {
   max-width: 190px;
@@ -2257,6 +2280,7 @@ export const topologyStyles = `
 
 .PodLogsModal__podMenu,
 .PodLogsModal__hiddenMenu,
+.PodLogsModal__containerMenu,
 .PodLogsModal__severityMenu,
 .PodLogsModal__rangeMenu {
   position: absolute;
@@ -2457,8 +2481,36 @@ export const topologyStyles = `
 }
 
 .PodLogsModal__podMenu label:hover,
+.PodLogsModal__containerMenu button:hover,
 .PodLogsModal__severityMenu label:hover {
   background: rgba(127, 180, 255, 0.08);
+}
+
+.PodLogsModal__containerMenu {
+  left: 76px;
+  width: 240px;
+}
+
+.PodLogsModal__containerMenu button {
+  display: block;
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  overflow: hidden;
+  color: var(--textColorPrimary);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.PodLogsModal__containerMenu button.is-selected {
+  color: #7fb4ff;
+  background: rgba(75, 123, 236, 0.16);
+  font-weight: 700;
 }
 
 .PodLogsModal__podMenu input,
@@ -2553,6 +2605,13 @@ export const topologyStyles = `
   font-weight: 700;
 }
 
+.PodLogsModal__toolbar .PodLogsModal__rangeMode button.is-pending {
+  color: var(--textColorPrimary);
+  border-color: transparent;
+  background: rgba(160, 170, 180, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(160, 170, 180, 0.2);
+}
+
 .PodLogsModal__severityFilter > button.is-active {
   color: #7fb4ff;
   border-color: #4b7bec;
@@ -2586,6 +2645,35 @@ export const topologyStyles = `
   border: 1px solid var(--borderColor);
   border-radius: 4px;
   font-size: 12px;
+}
+
+.PodLogsModal__olderBar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 16px 0;
+  color: var(--textColorSecondary);
+  font-size: 12px;
+}
+
+.PodLogsModal__olderBar button {
+  height: 28px;
+  padding: 0 10px;
+  color: var(--textColorPrimary);
+  background: var(--layoutBackground);
+  border: 1px solid var(--borderColor);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.PodLogsModal__olderBar button:hover:not(:disabled) {
+  border-color: #4b7bec;
+  color: #7fb4ff;
+}
+
+.PodLogsModal__olderBar button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .PodLogsModal__terminal {
