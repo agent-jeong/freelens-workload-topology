@@ -1,5 +1,9 @@
 import type { KubeObjectLike, PodLogEntry, PodLogLine, TopologyNode } from "../../types";
 
+type ParsedLogLine = PodLogLine & { order: number };
+
+const parsedEntryCache = new WeakMap<PodLogEntry, { sourceIndex: number; lines: ParsedLogLine[] }>();
+
 export function podContainers(pod: KubeObjectLike): string[] {
   const containers = [
     ...(pod.spec?.initContainers ?? []),
@@ -306,8 +310,59 @@ function timestampMsFromValue(value: string | undefined): number | undefined {
 }
 
 export function logLines(entries: PodLogEntry[]): PodLogLine[] {
-  let order = 0;
-  const lines: Array<PodLogLine & { order: number }> = entries.flatMap((entry, sourceIndex): Array<PodLogLine & { order: number }> => {
+  const groups = entries.map((entry, sourceIndex) => parseEntryLogLines(entry, sourceIndex));
+  const cursors = new Array(groups.length).fill(0);
+  const merged: ParsedLogLine[] = [];
+
+  while (true) {
+    let nextGroupIndex = -1;
+    let nextLine: ParsedLogLine | undefined;
+
+    for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
+      const line = groups[groupIndex][cursors[groupIndex]];
+
+      if (!line) {
+        continue;
+      }
+
+      if (!nextLine || compareParsedLogLines(line, nextLine) < 0) {
+        nextLine = line;
+        nextGroupIndex = groupIndex;
+      }
+    }
+
+    if (!nextLine || nextGroupIndex === -1) {
+      break;
+    }
+
+    merged.push(nextLine);
+    cursors[nextGroupIndex] += 1;
+  }
+
+  return merged.map(({ order: _order, ...line }) => line);
+}
+
+function compareParsedLogLines(a: ParsedLogLine, b: ParsedLogLine): number {
+  if (a.timestampMs !== undefined && b.timestampMs !== undefined && a.timestampMs !== b.timestampMs) {
+    return a.timestampMs - b.timestampMs;
+  }
+
+  if (a.timestamp && b.timestamp && a.timestamp !== b.timestamp) {
+    return a.timestamp.localeCompare(b.timestamp);
+  }
+
+  return a.order - b.order;
+}
+
+function parseEntryLogLines(entry: PodLogEntry, sourceIndex: number): ParsedLogLine[] {
+  const cached = parsedEntryCache.get(entry);
+
+  if (cached && cached.sourceIndex === sourceIndex) {
+    return cached.lines;
+  }
+
+  const baseOrder = sourceIndex * 1_000_000_000;
+  const lines: ParsedLogLine[] = (() => {
     if (entry.error) {
       return [{
         id: `${entry.namespace}:${entry.podName}:${entry.containerName}:error`,
@@ -321,7 +376,7 @@ export function logLines(entries: PodLogEntry[]): PodLogLine[] {
         wrappedDisplayMessage: entry.error,
         severity: "error",
         error: true,
-        order: order++
+        order: baseOrder
       }];
     }
 
@@ -349,22 +404,15 @@ export function logLines(entries: PodLogEntry[]): PodLogLine[] {
         displayMessage: display.displayMessage,
         wrappedDisplayMessage: display.wrappedDisplayMessage,
         severity: display.severity === "unknown" ? detectLogSeverity(parsed.message) : display.severity,
-        order: order++
+        order: baseOrder + lineIndex
       };
     });
-  });
+  })();
 
-  return lines.sort((a, b) => {
-    if (a.timestampMs !== undefined && b.timestampMs !== undefined && a.timestampMs !== b.timestampMs) {
-      return a.timestampMs - b.timestampMs;
-    }
+  lines.sort(compareParsedLogLines);
+  parsedEntryCache.set(entry, { sourceIndex, lines });
 
-    if (a.timestamp && b.timestamp && a.timestamp !== b.timestamp) {
-      return a.timestamp.localeCompare(b.timestamp);
-    }
-
-    return a.order - b.order;
-  }).map(({ order: _order, ...line }) => line);
+  return lines;
 }
 
 export function cleanLogMessage(value: string): string {

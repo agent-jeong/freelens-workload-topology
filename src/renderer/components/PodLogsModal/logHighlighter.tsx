@@ -4,18 +4,19 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-export function highlightLogText(value: string, query: string): React.ReactNode {
-  const normalizedQuery = query.trim();
+export function highlightLogText(value: string, terms: string[]): React.ReactNode {
+  const validTerms = terms.map((t) => t.trim()).filter(Boolean);
 
-  if (!normalizedQuery) {
+  if (validTerms.length === 0) {
     return value;
   }
 
-  const parts = value.split(new RegExp(`(${escapeRegExp(normalizedQuery)})`, "ig"));
+  const pattern = validTerms.map(escapeRegExp).join("|");
+  const parts = value.split(new RegExp(`(${pattern})`, "ig"));
 
-  return parts.map((part, index) => (
-    part.toLowerCase() === normalizedQuery.toLowerCase()
+  return parts.map((part, index) =>
+    validTerms.some((t) => part.toLowerCase() === t.toLowerCase())
       ? <mark key={index}>{part}</mark>
       : <React.Fragment key={index}>{part}</React.Fragment>
-  ));
+  );
 }

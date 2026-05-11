@@ -27,6 +27,11 @@ type RangeLineResult = {
   lines: PodLogLine[];
 };
 
+type SearchChip = {
+  id: number;
+  value: string;
+};
+
 function toDateTimeLocalValue(date: Date): string {
   const pad = (value: number) => String(value).padStart(2, "0");
 
@@ -87,6 +92,36 @@ function lastLogLine(text: string): string {
   const index = trimmed.lastIndexOf("\n");
 
   return index === -1 ? trimmed : trimmed.slice(index + 1);
+}
+
+function appendIncrementalText(existingText: string, incrementalText: string): string {
+  const incomingLines = incrementalText.split("\n").filter((line) => line.trim().length > 0);
+
+  if (incomingLines.length === 0) {
+    return existingText;
+  }
+
+  if (!existingText.trim() || existingText.trim() === "No recent logs.") {
+    return incomingLines.join("\n");
+  }
+
+  const lastExistingLine = lastLogLine(existingText);
+  let appendFrom = 0;
+
+  for (let index = incomingLines.length - 1; index >= 0; index -= 1) {
+    if (incomingLines[index] === lastExistingLine) {
+      appendFrom = index + 1;
+      break;
+    }
+  }
+
+  const linesToAppend = incomingLines.slice(appendFrom);
+
+  if (linesToAppend.length === 0) {
+    return existingText;
+  }
+
+  return `${existingText.trimEnd()}\n${linesToAppend.join("\n")}`;
 }
 
 function countNonEmptyLines(text: string): number {
@@ -323,10 +358,11 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
   const [live, setLive] = useState(true);
   const [previous, setPrevious] = useState(false);
   const [query, setQuery] = useState("");
+  const [searchChips, setSearchChips] = useState<SearchChip[]>([]);
+  const [disabledChips, setDisabledChips] = useState<Set<number>>(new Set());
   const [excludedMessages, setExcludedMessages] = useState<Set<string>>(new Set());
   const [selectedPods, setSelectedPods] = useState<string[]>([]);
   const [podFilterOpen, setPodFilterOpen] = useState(false);
-  const [hiddenFilterOpen, setHiddenFilterOpen] = useState(false);
   const [selectedContainer, setSelectedContainer] = useState("all");
   const [containerFilterOpen, setContainerFilterOpen] = useState(false);
   const [selectedSeverities, setSelectedSeverities] = useState<Set<string>>(new Set());
@@ -348,11 +384,31 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
   const [rangeMessage, setRangeMessage] = useState<string | null>(null);
   const logBodyRef = useRef<HTMLDivElement | null>(null);
   const lineRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const searchChipIdRef = useRef(0);
   const lastTimestampRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const olderBaselineLineCountRef = useRef<number | null>(null);
   const olderLoadRequestedRef = useRef(false);
   const rangeLineLimitRef = useRef<RangeLineLimit>(rangeLineLimit);
+  const modalRef = useRef<HTMLElement | null>(null);
+  const podFilterRef = useRef<HTMLDivElement | null>(null);
+  const containerFilterRef = useRef<HTMLDivElement | null>(null);
+  const severityFilterRef = useRef<HTMLDivElement | null>(null);
+  const rangeFilterRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const modal = modalRef.current;
+    if (!modal) return;
+    function handleClickOutside(event: MouseEvent) {
+      const target = event.target as Node;
+      if (podFilterOpen && podFilterRef.current && !podFilterRef.current.contains(target)) setPodFilterOpen(false);
+      if (containerFilterOpen && containerFilterRef.current && !containerFilterRef.current.contains(target)) setContainerFilterOpen(false);
+      if (severityFilterOpen && severityFilterRef.current && !severityFilterRef.current.contains(target)) setSeverityFilterOpen(false);
+      if (rangeOpen && rangeFilterRef.current && !rangeFilterRef.current.contains(target)) setRangeOpen(false);
+    }
+    modal.addEventListener("mousedown", handleClickOutside);
+    return () => modal.removeEventListener("mousedown", handleClickOutside);
+  }, [podFilterOpen, containerFilterOpen, severityFilterOpen, rangeOpen]);
   const [rangeScrollRequest, setRangeScrollRequest] = useState<{ edge: "top" | "bottom"; tick: number } | null>(null);
 
   useEffect(() => {
@@ -447,24 +503,18 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
       const hasNewData = newEntries.some((entry) => entry.text.trim().length > 0);
       if (!hasNewData) return;
 
-      setEntries((prev) => prev.map((existing, i) => {
-        const newEntry = newEntries[i];
-        if (!newEntry || !newEntry.text.trim()) return existing;
+      setEntries((prev) => {
+        const appended = prev.map((existing, i) => {
+          const newEntry = newEntries[i];
+          if (!newEntry || !newEntry.text.trim()) return existing;
 
-        const lastExistingLine = lastLogLine(existing.text);
-        const newLines = newEntry.text.split("\n").filter((line) => line.trim() && line > lastExistingLine);
+          const text = appendIncrementalText(existing.text, newEntry.text);
 
-        if (newLines.length === 0) return existing;
-
-        return {
-          ...existing,
-          text: existing.text + "\n" + newLines.join("\n")
-        };
-      }));
-      setEntries((current) => {
+          return text === existing.text ? existing : { ...existing, text };
+        });
         const currentLineLimit = rangeLineLimitRef.current;
         const maxLoadedLines = currentLineLimit === 0 ? null : Math.min(currentLineLimit, Math.max(LOG_BUFFER_LINES, loadedTailLines));
-        return maxLoadedLines ? trimEntriesToLineLimit(current, maxLoadedLines) : current;
+        return maxLoadedLines ? trimEntriesToLineLimit(appended, maxLoadedLines) : appended;
       });
     }
 
@@ -526,6 +576,13 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
     rangeFrom.replace("T", " ") !== rangeBounds.label.split(" ~ ")[0] ||
     rangeTo.replace("T", " ") !== rangeBounds.label.split(" ~ ")[1]
   ));
+  const hasRestarts = useMemo(() => {
+    const pods = node.pods ?? (node.kind === "Pod" ? [node.object] : []);
+    return pods.some((pod: any) =>
+      [...(pod.status?.containerStatuses ?? []), ...(pod.status?.initContainerStatuses ?? [])]
+        .some((cs: any) => (cs.restartCount ?? 0) > 0)
+    );
+  }, [node]);
   const podOptions = useMemo(() => [...new Set(allLines.map((line) => line.podName))].sort(), [allLines]);
   const containerOptions = useMemo(() => [...new Set(allLines.map((line) => line.containerName))].sort(), [allLines]);
 
@@ -550,15 +607,35 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
       lines = lines.filter((line) => selectedSeverities.has(line.severity));
     }
 
-    if (normalizedQuery) {
-      lines = lines.filter((line) => `${line.message}\t${line.podName}\t${line.containerName}\t${line.timestamp ?? ""}`.toLowerCase().includes(normalizedQuery));
+    // Chips: AND between chips, OR within comma-separated terms (skip disabled)
+    const allTermGroups = [
+      ...searchChips.map((chip) => disabledChips.has(chip.id) ? [] : chip.value.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean)),
+      ...(normalizedQuery ? [[normalizedQuery]] : []),
+    ].filter((group) => group.length > 0);
+
+    if (allTermGroups.length > 0) {
+      lines = lines.filter((line) => {
+        const text = `${line.message}\t${line.podName}\t${line.containerName}\t${line.timestamp ?? ""}`.toLowerCase();
+        return allTermGroups.every((orGroup) => orGroup.some((term) => text.includes(term)));
+      });
     }
 
     return lines;
-  }, [allLines, debouncedQuery, selectedPods, selectedContainer, selectedSeverities, excludedMessages]);
+  }, [allLines, debouncedQuery, searchChips, disabledChips, selectedPods, selectedContainer, selectedSeverities, excludedMessages]);
 
-  const matchCount = debouncedQuery.trim() ? filteredLines.length : 0;
-  const selectedMatchText = matchCount > 0 ? `${selectedMatchIndex + 1} / ${matchCount}` : debouncedQuery.trim() ? "0 / 0" : `${filteredLines.length} lines`;
+  const searchTerms = useMemo(() => {
+    const terms: string[] = [];
+    searchChips.forEach((chip) => {
+      if (!disabledChips.has(chip.id)) {
+        chip.value.split(",").forEach((t) => { if (t.trim()) terms.push(t.trim()); });
+      }
+    });
+    if (debouncedQuery.trim()) terms.push(debouncedQuery.trim());
+    return terms;
+  }, [searchChips, disabledChips, debouncedQuery]);
+  const hasActiveSearch = searchTerms.length > 0;
+  const matchCount = hasActiveSearch ? filteredLines.length : 0;
+  const selectedMatchText = matchCount > 0 ? `${selectedMatchIndex + 1} / ${matchCount}` : hasActiveSearch ? "0 / 0" : `${filteredLines.length} lines`;
   const podFilterLabel = selectedPods.length === 0 ? "All pods" : selectedPods.length === 1 ? selectedPods[0] : `${selectedPods.length} pods`;
   const containerFilterLabel = selectedContainer === "all" ? "All containers" : selectedContainer;
   const hiddenMessages = useMemo(() => [...excludedMessages].sort(), [excludedMessages]);
@@ -567,7 +644,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
 
   useEffect(() => {
     setSelectedMatchIndex(0);
-  }, [query, selectedPods, selectedContainer, selectedSeverities, rangeBounds, appliedRangeResultEdge, appliedRangeLineLimit]);
+  }, [debouncedQuery, searchChips, disabledChips, selectedPods, selectedContainer, selectedSeverities, rangeBounds, appliedRangeResultEdge, appliedRangeLineLimit]);
 
   useEffect(() => {
     if (selectedMatchIndex >= filteredLines.length) {
@@ -576,12 +653,12 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
   }, [filteredLines.length, selectedMatchIndex]);
 
   useEffect(() => {
-    if (!live || previous || query.trim() || !autoScroll || !logBodyRef.current) {
+    if (!live || previous || hasActiveSearch || !autoScroll || !logBodyRef.current) {
       return;
     }
 
     logBodyRef.current.scrollTop = logBodyRef.current.scrollHeight;
-  }, [filteredLines, live, previous, query, autoScroll]);
+  }, [filteredLines, live, previous, hasActiveSearch, autoScroll]);
 
   function downloadLogs() {
     const lines = filteredLines.map((line) => line.message);
@@ -802,7 +879,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
         return;
       }
 
-      if (!query.trim() || matchCount === 0) {
+      if (!hasActiveSearch || matchCount === 0) {
         return;
       }
 
@@ -818,7 +895,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
     window.addEventListener("keydown", handleKeyDown);
 
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [query, matchCount, fullscreen, rangeOpen]);
+  }, [hasActiveSearch, matchCount, fullscreen, rangeOpen]);
 
   useEffect(() => {
     function stopEscForParent(event: KeyboardEvent) {
@@ -839,7 +916,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
 
   return (
     <div className="PodLogsModal__backdrop" onMouseDown={onClose}>
-      <section className={`PodLogsModal${fullscreen ? " is-fullscreen" : ""}`} onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Pod logs">
+      <section ref={modalRef} className={`PodLogsModal${fullscreen ? " is-fullscreen" : ""}`} onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Pod logs">
         <header className="PodLogsModal__header">
           <div>
             <span>Pod logs</span>
@@ -853,235 +930,258 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
           </div>
         </header>
         <div className="PodLogsModal__toolbar">
-          <label>
-            <span>Tail</span>
-            <select value={tailLines} disabled={rangeActive} onChange={(event) => {
-              const nextTail = Number(event.target.value);
-              setTailNoLimit(false);
-              setOlderExhausted(false);
-              setTailLines(nextTail);
-              setLoadedTailLines(nextTail);
-              setOlderMessage(null);
-            }}>
-              <option value={100}>100</option>
-              <option value={300}>300</option>
-              <option value={1000}>1000</option>
-              <option value={5000}>5000</option>
-            </select>
-          </label>
-          <label className={`PodLogsModal__maxControl${rangeMaxHasPendingChanges ? " is-pending" : ""}`} title="Maximum lines kept for range results and older log loading">
-            <span>Max</span>
-            <select value={rangeLineLimit} disabled={rangeLoading} onChange={(event) => {
-              applyMaxLineLimit(Number(event.target.value) as RangeLineLimit);
-            }}>
-              {RANGE_LINE_LIMIT_OPTIONS.map((value) => (
-                <option key={value} value={value}>{lineLimitLabel(value)}</option>
-              ))}
-            </select>
-          </label>
-          <button type="button" className={live && !previous && !rangeActive ? "is-active" : ""} disabled={previous || rangeActive} onClick={() => setLive((value) => !value)}>
-            Live
-          </button>
-          <button
-            type="button"
-            className={autoScroll ? "is-active" : ""}
-            disabled={!live || previous || rangeActive}
-            onClick={() => setAutoScroll((value) => !value)}
-            title="Auto-scroll to latest logs"
-          >
-            Auto-scroll
-          </button>
-          <button
-            type="button"
-            className={previous ? "is-active" : ""}
-            disabled={rangeActive}
-            onClick={() => {
-              setPrevious((value) => !value);
-              setLive(false);
-            }}
-          >
-            Previous
-          </button>
-          <div className="PodLogsModal__rangeFilter">
-            <button type="button" className={rangeActive ? "is-active" : ""} onClick={() => setRangeOpen((value) => !value)}>
-              Range
+          <div className="PodLogsModal__toolbarActions">
+            <button type="button" className={live && !previous && !rangeActive ? "is-active" : ""} disabled={previous || rangeActive} onClick={() => setLive((value) => !value)}>
+              Live
             </button>
-            {rangeOpen ? (
-              <div className="PodLogsModal__rangeMenu">
-                <div className="PodLogsModal__rangeHeader">
-                  <strong>Date range</strong>
-                  <span>{rangeHasPendingChanges ? "Pending changes" : rangeActive ? "Active" : "Inactive"}</span>
-                </div>
-                <label className="PodLogsModal__rangeField">
-                  <span>From</span>
-                  <input type="datetime-local" value={rangeFrom} onChange={(event) => setRangeFrom(event.target.value)} />
-                </label>
-                <label className="PodLogsModal__rangeField">
-                  <span>To</span>
-                  <input type="datetime-local" value={rangeTo} onChange={(event) => setRangeTo(event.target.value)} />
-                </label>
-                <div className="PodLogsModal__rangeMode">
-                  <span>When capped</span>
-                  <div>
-                    <button type="button" className={rangeEdgeButtonClass("earliest")} onClick={() => setRangeResultEdge("earliest")}>Earliest</button>
-                    <button type="button" className={rangeEdgeButtonClass("latest")} onClick={() => setRangeResultEdge("latest")}>Latest</button>
-                  </div>
-                </div>
-                <div className="PodLogsModal__rangeHint">
-                  Kubernetes supports start time only. End time is filtered locally. Max is set in the log toolbar.
-                  {rangeLineLimit === 0 ? " No limit may use significant memory and slow search/filtering." : rangeLineLimit >= 500000 ? " 500,000 lines may use more memory and slow search/filtering." : ""}
-                </div>
-                <div className="PodLogsModal__rangeActions">
-                  {rangeLoading ? (
-                    <button type="button" className="is-danger" onClick={cancelRangeLoad}>Cancel</button>
-                  ) : null}
-                  {rangeActive ? (
-                    <button type="button" onClick={clearRange}>Clear</button>
-                  ) : null}
-                  <button type="button" disabled={rangeLoading} onClick={() => void applyRange()}>Apply</button>
-                </div>
-              </div>
-            ) : null}
-          </div>
-          {hiddenMessages.length > 0 ? (
-            <div className="PodLogsModal__hiddenFilter">
-              <span>Hidden</span>
-              <button type="button" className="is-danger" onClick={() => setHiddenFilterOpen((value) => !value)}>
-                {hiddenMessages.length} messages
+            <button
+              type="button"
+              className={autoScroll ? "is-active" : ""}
+              disabled={!live || previous || rangeActive}
+              onClick={() => setAutoScroll((value) => !value)}
+              title="Auto-scroll to latest logs"
+            >
+              Follow
+            </button>
+            {hasRestarts ? (
+              <button
+                type="button"
+                className={previous ? "is-active" : ""}
+                disabled={rangeActive}
+                onClick={() => {
+                  setPrevious((value) => !value);
+                  setLive(false);
+                }}
+              >
+                Previous
               </button>
-              {hiddenFilterOpen ? (
-                <div className="PodLogsModal__hiddenMenu">
-                  <div className="PodLogsModal__hiddenActions">
-                    <button type="button" onClick={() => setExcludedMessages(new Set())}>Clear all</button>
-                  </div>
-                  {hiddenMessages.map((message) => (
-                    <div key={message} className="PodLogsModal__hiddenItem">
-                      <span title={message}>{message}</span>
-                      <button
-                        type="button"
-                        aria-label="Remove hidden message"
-                        onClick={() => setExcludedMessages((current) => {
-                          const next = new Set(current);
-                          next.delete(message);
-                          return next;
-                        })}
-                      >
-                        &times;
-                      </button>
-                    </div>
+            ) : null}
+            <div className="PodLogsModal__podFilter" ref={podFilterRef}>
+              <button type="button" className={selectedPods.length > 0 ? "is-active" : ""} onClick={() => setPodFilterOpen((v) => !v)}>
+                {podFilterLabel}
+              </button>
+              {podFilterOpen ? (
+                <div className="PodLogsModal__podMenu">
+                  <label>
+                    <input type="checkbox" checked={selectedPods.length === 0} onChange={() => setSelectedPods([])} />
+                    <span>All pods</span>
+                  </label>
+                  {podOptions.map((podName) => (
+                    <label key={podName}>
+                      <input type="checkbox" checked={selectedPods.includes(podName)} onChange={() => toggleSelectedPod(podName)} />
+                      <span title={podName}>{podName}</span>
+                    </label>
                   ))}
                 </div>
               ) : null}
             </div>
-          ) : null}
-          <div className="PodLogsModal__podFilter">
-            <span>Pod</span>
-            <button type="button" onClick={() => setPodFilterOpen((value) => !value)}>{podFilterLabel}</button>
-            {podFilterOpen ? (
-              <div className="PodLogsModal__podMenu">
-                <label>
-                  <input type="checkbox" checked={selectedPods.length === 0} onChange={() => setSelectedPods([])} />
-                  <span>All pods</span>
-                </label>
-                {podOptions.map((podName) => (
-                  <label key={podName}>
-                    <input type="checkbox" checked={selectedPods.includes(podName)} onChange={() => toggleSelectedPod(podName)} />
-                    <span title={podName}>{podName}</span>
-                  </label>
-                ))}
-              </div>
-            ) : null}
-          </div>
-          <div className="PodLogsModal__containerFilter">
-            <span>Container</span>
-            <button type="button" title={containerFilterLabel} onClick={() => setContainerFilterOpen((value) => !value)}>{containerFilterLabel}</button>
-            {containerFilterOpen ? (
-              <div className="PodLogsModal__containerMenu">
-                <button
-                  type="button"
-                  className={selectedContainer === "all" ? "is-selected" : ""}
-                  onClick={() => {
-                    setSelectedContainer("all");
-                    setContainerFilterOpen(false);
-                  }}
-                >
-                  All containers
-                </button>
-                {containerOptions.map((containerName) => (
-                  <button
-                    key={containerName}
-                    type="button"
-                    className={selectedContainer === containerName ? "is-selected" : ""}
-                    title={containerName}
-                    onClick={() => {
-                      setSelectedContainer(containerName);
-                      setContainerFilterOpen(false);
-                    }}
-                  >
-                    {containerName}
+            <div className="PodLogsModal__containerFilter" ref={containerFilterRef}>
+              <button type="button" className={selectedContainer !== "all" ? "is-active" : ""} title={containerFilterLabel} onClick={() => setContainerFilterOpen((v) => !v)}>
+                {containerFilterLabel}
+              </button>
+              {containerFilterOpen ? (
+                <div className="PodLogsModal__containerMenu">
+                  <button type="button" className={selectedContainer === "all" ? "is-selected" : ""} onClick={() => { setSelectedContainer("all"); setContainerFilterOpen(false); }}>
+                    All containers
                   </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
-          <div className="PodLogsModal__severityFilter">
-            <span>Log Level</span>
-            <button type="button" className={selectedSeverities.size > 0 ? "is-active" : ""} onClick={() => setSeverityFilterOpen((v) => !v)}>
-              {selectedSeverities.size === 0 ? "All" : [...selectedSeverities].join(", ")}
-            </button>
-            {severityFilterOpen ? (
-              <div className="PodLogsModal__severityMenu">
-                <label>
-                  <input type="checkbox" checked={selectedSeverities.size === 0} onChange={() => setSelectedSeverities(new Set())} />
-                  <span>All levels</span>
-                </label>
-                {(["error", "warning", "info", "debug", "trace", "unknown"] as const).map((sev) => (
-                  <label key={sev}>
-                    <input
-                      type="checkbox"
-                      checked={selectedSeverities.has(sev)}
-                      onChange={() => setSelectedSeverities((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(sev)) next.delete(sev); else next.add(sev);
-                        return next;
-                      })}
-                    />
-                    <span>{sev}</span>
+                  {containerOptions.map((containerName) => (
+                    <button
+                      key={containerName}
+                      type="button"
+                      className={selectedContainer === containerName ? "is-selected" : ""}
+                      title={containerName}
+                      onClick={() => { setSelectedContainer(containerName); setContainerFilterOpen(false); }}
+                    >
+                      {containerName}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+            <div className="PodLogsModal__severityFilter" ref={severityFilterRef}>
+              <button type="button" className={selectedSeverities.size > 0 ? "is-active" : ""} onClick={() => setSeverityFilterOpen((v) => !v)}>
+                {selectedSeverities.size === 0 ? "All levels" : [...selectedSeverities].join(", ")}
+              </button>
+              {severityFilterOpen ? (
+                <div className="PodLogsModal__severityMenu">
+                  <label>
+                    <input type="checkbox" checked={selectedSeverities.size === 0} onChange={() => setSelectedSeverities(new Set())} />
+                    <span>All levels</span>
                   </label>
-                ))}
+                  {(["error", "warning", "info", "debug", "trace", "unknown"] as const).map((sev) => (
+                    <label key={sev}>
+                      <input
+                        type="checkbox"
+                        checked={selectedSeverities.has(sev)}
+                        onChange={() => setSelectedSeverities((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(sev)) next.delete(sev); else next.add(sev);
+                          return next;
+                        })}
+                      />
+                      <span>{sev}</span>
+                    </label>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+            {hiddenMessages.length > 0 ? (
+              <div className="PodLogsModal__hiddenFilter">
+                <button type="button" className="is-danger" onClick={() => setExcludedMessages(new Set())}>
+                  {hiddenMessages.length} hidden
+                </button>
               </div>
             ) : null}
+            <div className="PodLogsModal__rangeFilter" ref={rangeFilterRef}>
+              <button type="button" className={rangeActive ? "is-active" : ""} onClick={() => setRangeOpen((value) => !value)}>
+                Time Range
+              </button>
+              {rangeOpen ? (
+                <div className="PodLogsModal__rangeMenu">
+                  <div className="PodLogsModal__rangeHeader">
+                    <strong>Time Range</strong>
+                    <span>{rangeHasPendingChanges ? "Pending changes" : rangeActive ? "Active" : "Inactive"}</span>
+                  </div>
+                  <label className="PodLogsModal__rangeField">
+                    <span>From</span>
+                    <input type="datetime-local" value={rangeFrom} onChange={(event) => setRangeFrom(event.target.value)} />
+                  </label>
+                  <label className="PodLogsModal__rangeField">
+                    <span>To</span>
+                    <input type="datetime-local" value={rangeTo} onChange={(event) => setRangeTo(event.target.value)} />
+                  </label>
+                  <div className="PodLogsModal__rangeMode">
+                    <span>When capped</span>
+                    <div>
+                      <button type="button" className={rangeEdgeButtonClass("earliest")} onClick={() => setRangeResultEdge("earliest")}>Earliest</button>
+                      <button type="button" className={rangeEdgeButtonClass("latest")} onClick={() => setRangeResultEdge("latest")}>Latest</button>
+                    </div>
+                  </div>
+                  <div className="PodLogsModal__rangeHint">
+                    Kubernetes supports start time only. End time is filtered locally.
+                    {rangeLineLimit === 0 ? " No limit may use significant memory and slow search/filtering." : rangeLineLimit >= 500000 ? " 500k+ lines may slow search/filtering." : ""}
+                  </div>
+                  <div className="PodLogsModal__rangeActions">
+                    {rangeLoading ? (
+                      <button type="button" className="is-danger" onClick={cancelRangeLoad}>Cancel</button>
+                    ) : null}
+                    {rangeActive ? (
+                      <button type="button" onClick={clearRange}>Clear</button>
+                    ) : null}
+                    <button type="button" disabled={rangeLoading} onClick={() => void applyRange()}>Apply</button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              className={`PodLogsModal__wrapBtn${wrapLogs ? " is-active" : ""}`}
+              onClick={() => setWrapLogs((value) => !value)}
+              title="Line wrap"
+            >
+              {wrapLogs ? "Wrap On" : "Wrap Off"}
+            </button>
           </div>
-          <button
-            type="button"
-            className={wrapLogs ? "is-active" : ""}
-            onClick={() => setWrapLogs((value) => !value)}
-          >
-            Wrap
-          </button>
-          <button
-            type="button"
-            onClick={downloadLogs}
-            disabled={filteredLines.length === 0}
-            title="Download filtered logs"
-          >
-            Download
-          </button>
-          <input
-            type="text"
-            placeholder="Filter logs..."
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
+          <div className="PodLogsModal__toolbarSearch">
+            {searchChips.map((chip) => (
+              <span
+                key={chip.id}
+                className={`PodLogsModal__searchChip${disabledChips.has(chip.id) ? " is-disabled" : ""}`}
+                title={disabledChips.has(chip.id) ? "Click to enable this filter" : "Click to disable this filter"}
+                onClick={() => setDisabledChips((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(chip.id)) next.delete(chip.id); else next.add(chip.id);
+                  return next;
+                })}
+              >
+                <span className="PodLogsModal__searchChipText">{chip.value.includes(",") ? chip.value.split(",").join(" | ") : chip.value}</span>
+                <button type="button" aria-label="Remove filter" title="Remove filter" onClick={(e) => { e.stopPropagation(); setSearchChips((prev) => prev.filter((item) => item.id !== chip.id)); setDisabledChips((prev) => { const next = new Set(prev); next.delete(chip.id); return next; }); }}>&#x2715;</button>
+              </span>
+            ))}
+            <input
+              type="text"
+              placeholder={searchChips.length > 0 ? "Enter = AND, Shift+Enter = OR" : "Search logs... (Enter = AND, Shift+Enter = OR)"}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && query.trim()) {
+                  event.preventDefault();
+                  if (event.shiftKey && searchChips.length > 0) {
+                    setSearchChips((prev) => {
+                      const updated = [...prev];
+                      const last = updated[updated.length - 1];
+                      updated[updated.length - 1] = { ...last, value: `${last.value},${query.trim()}` };
+                      return updated;
+                    });
+                  } else {
+                    const id = searchChipIdRef.current + 1;
+                    searchChipIdRef.current = id;
+                    setSearchChips((prev) => [...prev, { id, value: query.trim() }]);
+                  }
+                  setQuery("");
+                } else if (event.key === "Backspace" && !query && searchChips.length > 0) {
+                  const removed = searchChips[searchChips.length - 1];
+                  setSearchChips((prev) => prev.slice(0, -1));
+                  setDisabledChips((prev) => {
+                    const next = new Set(prev);
+                    next.delete(removed.id);
+                    return next;
+                  });
+                }
+              }}
+            />
+          </div>
           <span className="PodLogsModal__count">{selectedMatchText}</span>
         </div>
         {limitMessage ? <div className="PodLogsModal__notice">{limitMessage}</div> : null}
         {!rangeActive ? (
           <div className="PodLogsModal__olderBar">
-            <button type="button" disabled={!canLoadOlder} onClick={loadOlderLogs}>
-              {olderExhausted || tailNoLimit ? "All available logs loaded" : nextOlderTailLines ? "Load older logs" : rangeLineLimit === 0 ? "Load all available logs" : "Reached max lines"}
-            </button>
-            <span>Loaded {tailNoLimit ? "All available" : loadedTailLines.toLocaleString()} / Max {lineLimitLabel(rangeLineLimit)}</span>
+            <label>
+              <span>Tail</span>
+              <select value={tailLines} onChange={(event) => {
+                const nextTail = Number(event.target.value);
+                setTailNoLimit(false);
+                setOlderExhausted(false);
+                setTailLines(nextTail);
+                setLoadedTailLines(nextTail);
+                setOlderMessage(null);
+              }}>
+                <option value={100}>100</option>
+                <option value={300}>300</option>
+                <option value={1000}>1000</option>
+                <option value={5000}>5000</option>
+              </select>
+            </label>
+            <label className={rangeMaxHasPendingChanges ? "is-pending" : ""} title="Maximum lines kept for older log loading">
+              <span>Max</span>
+              <select value={rangeLineLimit} onChange={(event) => {
+                applyMaxLineLimit(Number(event.target.value) as RangeLineLimit);
+              }}>
+                {RANGE_LINE_LIMIT_OPTIONS.map((value) => (
+                  <option key={value} value={value}>{lineLimitLabel(value)}</option>
+                ))}
+              </select>
+            </label>
+            <span className="PodLogsModal__olderStatus">
+              {tailNoLimit ? "All available" : loadedTailLines.toLocaleString()} loaded
+            </span>
+            {canLoadOlder ? (
+              <span className="PodLogsModal__olderLink" role="button" onClick={loadOlderLogs}>
+                {nextOlderTailLines ? "↑ Load older" : "Load all"}
+              </span>
+            ) : (
+              <span className="PodLogsModal__olderDone">
+                {olderExhausted || tailNoLimit ? "· all loaded" : "· limit reached"}
+              </span>
+            )}
+            <span
+              className="PodLogsModal__olderLink PodLogsModal__downloadLink"
+              role="button"
+              onClick={downloadLogs}
+              title="Download filtered logs"
+            >
+              ⬇ Download
+            </span>
           </div>
         ) : null}
         {olderMessage && !rangeActive ? <div className="PodLogsModal__notice">{olderMessage}</div> : null}
@@ -1095,7 +1195,8 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
         ) : (
           <VirtualLogList
             lines={filteredLines}
-            query={query}
+            searchTerms={searchTerms}
+            hasActiveSearch={hasActiveSearch}
             selectedMatchIndex={selectedMatchIndex}
             wrapLogs={wrapLogs}
             logBodyRef={logBodyRef}

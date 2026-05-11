@@ -5,7 +5,8 @@ import { highlightLogText } from "./logHighlighter";
 
 export function VirtualLogList({
   lines,
-  query,
+  searchTerms,
+  hasActiveSearch,
   selectedMatchIndex,
   wrapLogs,
   logBodyRef,
@@ -14,7 +15,8 @@ export function VirtualLogList({
   onExclude,
 }: {
   lines: PodLogLine[];
-  query: string;
+  searchTerms: string[];
+  hasActiveSearch: boolean;
   selectedMatchIndex: number;
   wrapLogs: boolean;
   logBodyRef: React.MutableRefObject<HTMLDivElement | null>;
@@ -133,7 +135,7 @@ export function VirtualLogList({
 
   useEffect(() => {
     const el = logBodyRef.current;
-    if (!el || !query.trim() || lines.length === 0) {
+    if (!el || !hasActiveSearch || lines.length === 0) {
       return;
     }
 
@@ -152,7 +154,7 @@ export function VirtualLogList({
     if (wrapLogs) {
       lineRefs.current[selectedMatchIndex]?.scrollIntoView({ block: "center" });
     }
-  }, [selectedMatchIndex, query, wrapLogs, itemOffsets, containerHeight, lines.length, logBodyRef, lineRefs]);
+  }, [selectedMatchIndex, hasActiveSearch, wrapLogs, itemOffsets, containerHeight, lines.length, logBodyRef, lineRefs]);
 
   const renderLine = (line: PodLogLine, index: number, top: number) => {
     const displayTimestamp = line.timestamp ? line.timestamp.replace("T", " ").replace("Z", "") : "";
@@ -173,13 +175,13 @@ export function VirtualLogList({
             }
           }
         }}
-        className={`PodLogsModal__line source-${line.sourceIndex % 8} severity-${line.severity}${line.error ? " is-error" : ""}${query.trim() && index === selectedMatchIndex ? " is-current-match" : ""}`}
+        className={`PodLogsModal__line source-${line.sourceIndex % 8} severity-${line.severity}${line.error ? " is-error" : ""}${hasActiveSearch && index === selectedMatchIndex ? " is-current-match" : ""}`}
         style={{ position: "absolute", top, left: 0, right: 0, ...(wrapLogs ? {} : { height: LOG_LINE_HEIGHT }) }}
       >
-        <span className="PodLogsModal__time">{highlightLogText(displayTimestamp, query)}</span>
+        <span className="PodLogsModal__time">{highlightLogText(displayTimestamp, searchTerms)}</span>
         <span className="PodLogsModal__severity">{line.severity === "unknown" ? "" : line.severity.toUpperCase()}</span>
-        <span className="PodLogsModal__source" title={`${line.podName} / ${line.containerName}`}>{highlightLogText(displaySource, query)}</span>
-        <span className="PodLogsModal__message" title={line.message}>{highlightLogText(wrapLogs ? line.wrappedDisplayMessage : line.displayMessage, query)}</span>
+        <span className="PodLogsModal__source" title={`${line.podName} / ${line.containerName}`}>{highlightLogText(displaySource, searchTerms)}</span>
+        <span className="PodLogsModal__message" title={line.message}>{highlightLogText(wrapLogs ? line.wrappedDisplayMessage : line.displayMessage, searchTerms)}</span>
         <button
           type="button"
           className="PodLogsModal__excludeButton"

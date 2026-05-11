@@ -2225,32 +2225,209 @@ export const topologyStyles = `
   border-bottom: 1px solid var(--borderColor);
 }
 
-.PodLogsModal__toolbar label {
+.PodLogsModal__toolbarSearch {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 120px;
+  height: 28px;
+  padding: 0 4px;
+  background: var(--layoutBackground);
+  border: 1px solid var(--borderColor);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.PodLogsModal__toolbarSearch:focus-within {
+  border-color: #4b7bec;
+}
+
+.PodLogsModal__toolbarSearch input {
+  flex: 1;
+  height: 100%;
+  min-width: 60px;
+  padding: 0 6px;
+  color: var(--textColorPrimary);
+  background: transparent;
+  border: none;
+  outline: none;
+  font-size: 12px;
+}
+
+.PodLogsModal__searchChip {
+  display: flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 2px 0 7px;
+  color: #7fb4ff;
+  background: rgba(75, 123, 236, 0.15);
+  border: 1px solid rgba(75, 123, 236, 0.35);
+  border-radius: 9px;
+  font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: pointer;
+  user-select: none;
+}
+
+.PodLogsModal__searchChip:hover {
+  background: rgba(75, 123, 236, 0.22);
+  border-color: rgba(75, 123, 236, 0.52);
+}
+
+.PodLogsModal__searchChipText {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.PodLogsModal__searchChip button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  padding: 0;
+  margin: 0 0 0 5px;
+  color: rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 9px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.PodLogsModal__searchChip button:hover {
+  color: #ffffff;
+  background: rgba(255, 107, 107, 0.7);
+  border-color: rgba(255, 107, 107, 0.95);
+}
+
+.PodLogsModal__searchChip.is-disabled {
+  color: var(--textColorSecondary);
+  background: rgba(160, 170, 180, 0.08);
+  border-color: rgba(160, 170, 180, 0.25);
+  opacity: 0.72;
+}
+
+.PodLogsModal__searchChip.is-disabled .PodLogsModal__searchChipText {
+  text-decoration: line-through;
+}
+
+.PodLogsModal__searchChip.is-disabled button {
+  opacity: 1;
+}
+
+.PodLogsModal__toolbarActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.PodLogsModal__modeSelect {
+  height: 28px;
+  padding: 0 8px;
+  color: var(--textColorPrimary);
+  background: var(--layoutBackground);
+  border: 1px solid var(--borderColor);
+  border-radius: 4px;
+  outline: none;
+  font-size: 12px;
+}
+
+.PodLogsModal__modeSelect:focus {
+  border-color: #4b7bec;
+}
+
+.PodLogsModal__unifiedFilter {
+  position: relative;
+}
+
+.PodLogsModal__filterPanel {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 200px;
+  max-height: 320px;
+  overflow-y: auto;
+  margin-top: 4px;
+  padding: 12px;
+  background: var(--mainBackground);
+  border: 1px solid var(--borderColor);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.PodLogsModal__filterSection {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.PodLogsModal__filterSection strong {
+  color: var(--textColorPrimary);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 2px;
+}
+
+.PodLogsModal__filterSection label {
   display: flex;
   align-items: center;
   gap: 6px;
   color: var(--textColorSecondary);
   font-size: 12px;
+  cursor: pointer;
 }
 
-.PodLogsModal__maxControl {
-  padding: 0 8px;
-  height: 30px;
+.PodLogsModal__filterSection label span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.PodLogsModal__filterClearBtn {
+  align-self: flex-start;
+  padding: 2px 8px;
+  color: #e06c75;
+  background: transparent;
+  border: 1px solid rgba(212, 72, 72, 0.4);
+  border-radius: 3px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.PodLogsModal__wrapBtn {
+  height: 28px;
+  padding: 0 10px;
+  color: var(--textColorSecondary);
+  background: var(--layoutBackground);
   border: 1px solid var(--borderColor);
   border-radius: 4px;
-  background: rgba(160, 170, 180, 0.06);
+  cursor: pointer;
+  font-size: 12px;
 }
 
-.PodLogsModal__maxControl.is-pending {
-  border-color: rgba(217, 155, 32, 0.65);
-  background: rgba(217, 155, 32, 0.08);
+.PodLogsModal__wrapBtn.is-active {
+  color: #72c98f;
+  border-color: #31a66a;
+  background: rgba(49, 166, 106, 0.12);
 }
 
-.PodLogsModal__maxControl select {
-  color: var(--textColorPrimary);
-  background: transparent;
-  border: 0;
-  outline: none;
+.PodLogsModal__toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--textColorSecondary);
   font-size: 12px;
 }
 
@@ -2581,6 +2758,19 @@ export const topologyStyles = `
   border-color: #4b7bec;
 }
 
+.PodLogsModal__toolbar .PodLogsModal__toolbarSearch input {
+  height: 100%;
+  min-width: 60px;
+  padding: 0 6px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.PodLogsModal__toolbar .PodLogsModal__toolbarSearch input:focus {
+  border-color: transparent;
+}
+
 .PodLogsModal__toolbar button {
   height: 28px;
   padding: 0 10px;
@@ -2589,6 +2779,24 @@ export const topologyStyles = `
   border: 1px solid var(--borderColor);
   border-radius: 4px;
   cursor: pointer;
+}
+
+.PodLogsModal__toolbar .PodLogsModal__searchChip button {
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  padding: 0;
+  color: rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 50%;
+  font-size: 9px;
+}
+
+.PodLogsModal__toolbar .PodLogsModal__searchChip button:hover {
+  color: #ffffff;
+  background: rgba(255, 107, 107, 0.7);
+  border-color: rgba(255, 107, 107, 0.95);
 }
 
 .PodLogsModal__toolbar button.is-active {
@@ -2612,7 +2820,8 @@ export const topologyStyles = `
   box-shadow: inset 0 0 0 1px rgba(160, 170, 180, 0.2);
 }
 
-.PodLogsModal__severityFilter > button.is-active {
+.PodLogsModal__severityFilter > button.is-active,
+.PodLogsModal__unifiedFilter > button.is-active {
   color: #7fb4ff;
   border-color: #4b7bec;
   background: rgba(75, 123, 236, 0.12);
@@ -2656,24 +2865,51 @@ export const topologyStyles = `
   font-size: 12px;
 }
 
-.PodLogsModal__olderBar button {
-  height: 28px;
-  padding: 0 10px;
+.PodLogsModal__olderBar label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.PodLogsModal__olderBar select {
+  height: 24px;
+  padding: 0 6px;
   color: var(--textColorPrimary);
   background: var(--layoutBackground);
   border: 1px solid var(--borderColor);
   border-radius: 4px;
-  cursor: pointer;
+  outline: none;
+  font-size: 11px;
 }
 
-.PodLogsModal__olderBar button:hover:not(:disabled) {
+.PodLogsModal__olderBar select:focus {
   border-color: #4b7bec;
-  color: #7fb4ff;
 }
 
-.PodLogsModal__olderBar button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
+.PodLogsModal__olderBar .is-pending span {
+  color: rgba(217, 155, 32, 0.85);
+}
+
+.PodLogsModal__olderStatus {
+  color: var(--textColorSecondary);
+}
+
+.PodLogsModal__olderLink {
+  color: #7fb4ff;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.PodLogsModal__olderLink:hover {
+  color: #a8cfff;
+}
+
+.PodLogsModal__olderDone {
+  opacity: 0.5;
+}
+
+.PodLogsModal__downloadLink {
+  margin-left: auto;
 }
 
 .PodLogsModal__terminal {
