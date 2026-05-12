@@ -31,6 +31,8 @@ export function VirtualLogList({
   const measuredHeightsRef = useRef<number[]>([]);
   const lastWrapWidthRef = useRef<number | null>(null);
   const handledScrollTickRef = useRef<number | null>(null);
+  const scrollRafRef = useRef<number | null>(null);
+  const prevMatchIndexRef = useRef<number>(selectedMatchIndex);
 
   useEffect(() => {
     const el = logBodyRef.current;
@@ -42,11 +44,20 @@ export function VirtualLogList({
       setContainerWidth(el.clientWidth);
     });
     ro.observe(el);
-    return () => ro.disconnect();
+    return () => {
+      ro.disconnect();
+      if (scrollRafRef.current !== null) cancelAnimationFrame(scrollRafRef.current);
+    };
   }, []);
 
+  const pendingScrollTopRef = useRef(0);
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    setScrollTop(e.currentTarget.scrollTop);
+    pendingScrollTopRef.current = e.currentTarget.scrollTop;
+    if (scrollRafRef.current !== null) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      setScrollTop(pendingScrollTopRef.current);
+    });
   };
 
   useEffect(() => {
@@ -136,6 +147,14 @@ export function VirtualLogList({
   useEffect(() => {
     const el = logBodyRef.current;
     if (!el || !hasActiveSearch || lines.length === 0) {
+      prevMatchIndexRef.current = selectedMatchIndex;
+      return;
+    }
+
+    const indexChanged = prevMatchIndexRef.current !== selectedMatchIndex;
+    prevMatchIndexRef.current = selectedMatchIndex;
+
+    if (!indexChanged) {
       return;
     }
 

@@ -30,6 +30,7 @@ type RangeLineResult = {
 type SearchChip = {
   id: number;
   value: string;
+  mode: "include" | "exclude";
 };
 
 function toDateTimeLocalValue(date: Date): string {
@@ -360,7 +361,13 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
   const [query, setQuery] = useState("");
   const [searchChips, setSearchChips] = useState<SearchChip[]>([]);
   const [disabledChips, setDisabledChips] = useState<Set<number>>(new Set());
+  const [chipMenuOpen, setChipMenuOpen] = useState<number | null>(null);
+  const [orTarget, setOrTarget] = useState<number | null>(null);
+  const chipMenuRef = useRef<HTMLDivElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [excludedMessages, setExcludedMessages] = useState<Set<string>>(new Set());
+  const [hiddenMenuOpen, setHiddenMenuOpen] = useState(false);
+  const hiddenMenuRef = useRef<HTMLDivElement | null>(null);
   const [selectedPods, setSelectedPods] = useState<string[]>([]);
   const [podFilterOpen, setPodFilterOpen] = useState(false);
   const [selectedContainer, setSelectedContainer] = useState("all");
@@ -405,10 +412,16 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
       if (containerFilterOpen && containerFilterRef.current && !containerFilterRef.current.contains(target)) setContainerFilterOpen(false);
       if (severityFilterOpen && severityFilterRef.current && !severityFilterRef.current.contains(target)) setSeverityFilterOpen(false);
       if (rangeOpen && rangeFilterRef.current && !rangeFilterRef.current.contains(target)) setRangeOpen(false);
+      if (chipMenuOpen !== null) {
+        const chipMenu = chipMenuRef.current;
+        const clickedChipText = (target as HTMLElement).closest?.(".PodLogsModal__searchChipText");
+        if (!clickedChipText && (!chipMenu || !chipMenu.contains(target))) setChipMenuOpen(null);
+      }
+      if (hiddenMenuOpen && hiddenMenuRef.current && !hiddenMenuRef.current.contains(target)) setHiddenMenuOpen(false);
     }
     modal.addEventListener("mousedown", handleClickOutside);
     return () => modal.removeEventListener("mousedown", handleClickOutside);
-  }, [podFilterOpen, containerFilterOpen, severityFilterOpen, rangeOpen]);
+  }, [podFilterOpen, containerFilterOpen, severityFilterOpen, rangeOpen, chipMenuOpen, hiddenMenuOpen]);
   const [rangeScrollRequest, setRangeScrollRequest] = useState<{ edge: "top" | "bottom"; tick: number } | null>(null);
 
   useEffect(() => {
@@ -607,16 +620,32 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
       lines = lines.filter((line) => selectedSeverities.has(line.severity));
     }
 
-    // Chips: AND between chips, OR within comma-separated terms (skip disabled)
-    const allTermGroups = [
-      ...searchChips.map((chip) => disabledChips.has(chip.id) ? [] : chip.value.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean)),
-      ...(normalizedQuery ? [[normalizedQuery]] : []),
-    ].filter((group) => group.length > 0);
+    // Chips: AND between include chips, OR within comma-separated terms (skip disabled)
+    // Exclude chips: lines matching any term in an exclude chip are removed
+    const includeGroups: string[][] = [];
+    const excludeGroups: string[][] = [];
 
-    if (allTermGroups.length > 0) {
+    for (const chip of searchChips) {
+      if (disabledChips.has(chip.id)) continue;
+      const terms = chip.value.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
+      if (terms.length === 0) continue;
+      if (chip.mode === "exclude") {
+        excludeGroups.push(terms);
+      } else {
+        includeGroups.push(terms);
+      }
+    }
+
+    if (normalizedQuery) {
+      includeGroups.push([normalizedQuery]);
+    }
+
+    if (excludeGroups.length > 0 || includeGroups.length > 0) {
       lines = lines.filter((line) => {
         const text = `${line.message}\t${line.podName}\t${line.containerName}\t${line.timestamp ?? ""}`.toLowerCase();
-        return allTermGroups.every((orGroup) => orGroup.some((term) => text.includes(term)));
+        if (excludeGroups.length > 0 && excludeGroups.some((orGroup) => orGroup.some((term) => text.includes(term)))) return false;
+        if (includeGroups.length > 0 && !includeGroups.every((orGroup) => orGroup.some((term) => text.includes(term)))) return false;
+        return true;
       });
     }
 
@@ -626,14 +655,15 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
   const searchTerms = useMemo(() => {
     const terms: string[] = [];
     searchChips.forEach((chip) => {
-      if (!disabledChips.has(chip.id)) {
+      if (!disabledChips.has(chip.id) && chip.mode !== "exclude") {
         chip.value.split(",").forEach((t) => { if (t.trim()) terms.push(t.trim()); });
       }
     });
     if (debouncedQuery.trim()) terms.push(debouncedQuery.trim());
     return terms;
   }, [searchChips, disabledChips, debouncedQuery]);
-  const hasActiveSearch = searchTerms.length > 0;
+  const hasActiveExclude = useMemo(() => searchChips.some((chip) => !disabledChips.has(chip.id) && chip.mode === "exclude"), [searchChips, disabledChips]);
+  const hasActiveSearch = searchTerms.length > 0 || hasActiveExclude;
   const matchCount = hasActiveSearch ? filteredLines.length : 0;
   const selectedMatchText = matchCount > 0 ? `${selectedMatchIndex + 1} / ${matchCount}` : hasActiveSearch ? "0 / 0" : `${filteredLines.length} lines`;
   const podFilterLabel = selectedPods.length === 0 ? "All pods" : selectedPods.length === 1 ? selectedPods[0] : `${selectedPods.length} pods`;
@@ -653,12 +683,12 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
   }, [filteredLines.length, selectedMatchIndex]);
 
   useEffect(() => {
-    if (!live || previous || hasActiveSearch || !autoScroll || !logBodyRef.current) {
+    if (!live || previous || !autoScroll || !logBodyRef.current) {
       return;
     }
 
     logBodyRef.current.scrollTop = logBodyRef.current.scrollHeight;
-  }, [filteredLines, live, previous, hasActiveSearch, autoScroll]);
+  }, [filteredLines, live, previous, autoScroll]);
 
   function downloadLogs() {
     const lines = filteredLines.map((line) => line.message);
@@ -863,26 +893,11 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
   }
 
   useEffect(() => {
+    if (!hasActiveSearch || matchCount === 0) {
+      return;
+    }
+
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape" && rangeOpen) {
-        event.preventDefault();
-        event.stopPropagation();
-        event.stopImmediatePropagation();
-        setRangeOpen(false);
-        return;
-      }
-
-      if (event.key === "Escape" && fullscreen) {
-        event.preventDefault();
-        event.stopPropagation();
-        setFullscreen(false);
-        return;
-      }
-
-      if (!hasActiveSearch || matchCount === 0) {
-        return;
-      }
-
       if (event.key === "ArrowUp") {
         event.preventDefault();
         moveMatch(-1);
@@ -895,24 +910,82 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
     window.addEventListener("keydown", handleKeyDown);
 
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [hasActiveSearch, matchCount, fullscreen, rangeOpen]);
+  }, [hasActiveSearch, matchCount]);
 
   useEffect(() => {
     function stopEscForParent(event: KeyboardEvent) {
-      if (event.key !== "Escape" || !rangeOpen) {
+      if (event.key !== "Escape") {
         return;
       }
 
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation();
-      setRangeOpen(false);
+      if (chipMenuOpen !== null) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        setChipMenuOpen(null);
+        return;
+      }
+
+      if (orTarget !== null) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        setOrTarget(null);
+        return;
+      }
+
+      if (hiddenMenuOpen) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        setHiddenMenuOpen(false);
+        return;
+      }
+
+      if (podFilterOpen) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        setPodFilterOpen(false);
+        return;
+      }
+
+      if (containerFilterOpen) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        setContainerFilterOpen(false);
+        return;
+      }
+
+      if (severityFilterOpen) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        setSeverityFilterOpen(false);
+        return;
+      }
+
+      if (rangeOpen) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        setRangeOpen(false);
+        return;
+      }
+
+      if (fullscreen) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        setFullscreen(false);
+      }
     }
 
     document.addEventListener("keydown", stopEscForParent, true);
 
     return () => document.removeEventListener("keydown", stopEscForParent, true);
-  }, [rangeOpen]);
+  }, [rangeOpen, orTarget, fullscreen, chipMenuOpen, hiddenMenuOpen, podFilterOpen, containerFilterOpen, severityFilterOpen]);
 
   return (
     <div className="PodLogsModal__backdrop" onMouseDown={onClose}>
@@ -1026,10 +1099,25 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
               ) : null}
             </div>
             {hiddenMessages.length > 0 ? (
-              <div className="PodLogsModal__hiddenFilter">
-                <button type="button" className="is-danger" onClick={() => setExcludedMessages(new Set())}>
+              <div className="PodLogsModal__hiddenFilter" ref={hiddenMenuRef} style={{ position: "relative" }}>
+                <button type="button" className="is-danger" onClick={() => setHiddenMenuOpen((v) => !v)}>
                   {hiddenMessages.length} hidden
                 </button>
+                {hiddenMenuOpen ? (
+                  <div className="PodLogsModal__hiddenMenu">
+                    <div className={`PodLogsModal__hiddenList${hiddenMessages.length > 5 ? " is-scrollable" : ""}`}>
+                      {hiddenMessages.map((msg) => (
+                        <div key={msg} className="PodLogsModal__hiddenItem" title={msg}>
+                          <span>{msg.length > 60 ? `${msg.slice(0, 60)}...` : msg}</span>
+                          <button type="button" title="Restore" onClick={() => setExcludedMessages((prev) => { const next = new Set(prev); next.delete(msg); if (next.size === 0) setHiddenMenuOpen(false); return next; })}>+</button>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="PodLogsModal__hiddenActions">
+                      <button type="button" onClick={() => { setExcludedMessages(new Set()); setHiddenMenuOpen(false); }}>Restore all</button>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             ) : null}
             <div className="PodLogsModal__rangeFilter" ref={rangeFilterRef}>
@@ -1086,47 +1174,65 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
             {searchChips.map((chip) => (
               <span
                 key={chip.id}
-                className={`PodLogsModal__searchChip${disabledChips.has(chip.id) ? " is-disabled" : ""}`}
-                title={disabledChips.has(chip.id) ? "Click to enable this filter" : "Click to disable this filter"}
-                onClick={() => setDisabledChips((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(chip.id)) next.delete(chip.id); else next.add(chip.id);
-                  return next;
-                })}
+                className={`PodLogsModal__searchChip${disabledChips.has(chip.id) ? " is-disabled" : ""}${chip.mode === "exclude" ? " is-exclude" : ""}${orTarget === chip.id ? " is-orTarget" : ""}`}
+                style={{ position: "relative" }}
               >
-                <span className="PodLogsModal__searchChipText">{chip.value.includes(",") ? chip.value.split(",").join(" | ") : chip.value}</span>
-                <button type="button" aria-label="Remove filter" title="Remove filter" onClick={(e) => { e.stopPropagation(); setSearchChips((prev) => prev.filter((item) => item.id !== chip.id)); setDisabledChips((prev) => { const next = new Set(prev); next.delete(chip.id); return next; }); }}>&#x2715;</button>
+                {chip.mode === "exclude" ? <span className="PodLogsModal__searchChipPrefix">NOT</span> : null}
+                <span className="PodLogsModal__searchChipText" onClick={() => setChipMenuOpen((prev) => prev === chip.id ? null : chip.id)}>
+                  {chip.value.includes(",") ? chip.value.split(",").join(" | ") : chip.value}
+                </span>
+                <button type="button" aria-label="Remove filter" title="Remove filter" onClick={(e) => { e.stopPropagation(); setSearchChips((prev) => prev.filter((item) => item.id !== chip.id)); setDisabledChips((prev) => { const next = new Set(prev); next.delete(chip.id); return next; }); if (orTarget === chip.id) setOrTarget(null); }}>&#x2715;</button>
+                {chipMenuOpen === chip.id ? (
+                  <div ref={chipMenuRef} className="PodLogsModal__chipMenu">
+                    <button type="button" onClick={() => { setOrTarget(chip.id); setChipMenuOpen(null); searchInputRef.current?.focus(); }}>+ OR condition</button>
+                    <button type="button" onClick={() => { setDisabledChips((prev) => { const next = new Set(prev); if (next.has(chip.id)) next.delete(chip.id); else next.add(chip.id); return next; }); setChipMenuOpen(null); }}>
+                      {disabledChips.has(chip.id) ? "Enable" : "Disable"}
+                    </button>
+                    <button type="button" onClick={() => { setSearchChips((prev) => prev.map((c) => c.id === chip.id ? { ...c, mode: c.mode === "exclude" ? "include" : "exclude" } : c)); setChipMenuOpen(null); }}>
+                      {chip.mode === "exclude" ? "Switch to Include" : "Switch to Exclude"}
+                    </button>
+                    <button type="button" className="is-danger" onClick={() => { setSearchChips((prev) => prev.filter((item) => item.id !== chip.id)); setDisabledChips((prev) => { const next = new Set(prev); next.delete(chip.id); return next; }); if (orTarget === chip.id) setOrTarget(null); setChipMenuOpen(null); }}>Delete</button>
+                  </div>
+                ) : null}
               </span>
             ))}
+            {orTarget !== null ? (
+              <span className="PodLogsModal__orIndicator" onClick={() => setOrTarget(null)}>
+                OR &#x2192; {searchChips.find((c) => c.id === orTarget)?.value.split(",")[0] ?? "?"} &#x2715;
+              </span>
+            ) : null}
             <input
+              ref={searchInputRef}
               type="text"
-              placeholder={searchChips.length > 0 ? "Enter = AND, Shift+Enter = OR" : "Search logs... (Enter = AND, Shift+Enter = OR)"}
+              placeholder={orTarget !== null ? "Type OR condition and press Enter..." : searchChips.length > 0 ? "Add AND filter..." : "Search logs..."}
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={(event) => {
+                if (event.nativeEvent.isComposing) return;
                 if (event.key === "Enter" && query.trim()) {
                   event.preventDefault();
-                  if (event.shiftKey && searchChips.length > 0) {
-                    setSearchChips((prev) => {
-                      const updated = [...prev];
-                      const last = updated[updated.length - 1];
-                      updated[updated.length - 1] = { ...last, value: `${last.value},${query.trim()}` };
-                      return updated;
-                    });
+                  if (orTarget !== null) {
+                    setSearchChips((prev) => prev.map((c) => c.id === orTarget ? { ...c, value: `${c.value},${query.trim()}` } : c));
+                    setOrTarget(null);
                   } else {
                     const id = searchChipIdRef.current + 1;
                     searchChipIdRef.current = id;
-                    setSearchChips((prev) => [...prev, { id, value: query.trim() }]);
+                    setSearchChips((prev) => [...prev, { id, value: query.trim(), mode: "include" }]);
                   }
                   setQuery("");
                 } else if (event.key === "Backspace" && !query && searchChips.length > 0) {
-                  const removed = searchChips[searchChips.length - 1];
-                  setSearchChips((prev) => prev.slice(0, -1));
-                  setDisabledChips((prev) => {
-                    const next = new Set(prev);
-                    next.delete(removed.id);
-                    return next;
-                  });
+                  if (orTarget !== null) {
+                    setOrTarget(null);
+                  } else {
+                    const removed = searchChips[searchChips.length - 1];
+                    setSearchChips((prev) => prev.slice(0, -1));
+                    setDisabledChips((prev) => {
+                      const next = new Set(prev);
+                      next.delete(removed.id);
+                      return next;
+                    });
+                    if (orTarget === removed.id) setOrTarget(null);
+                  }
                 }
               }}
             />

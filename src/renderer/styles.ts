@@ -2236,7 +2236,7 @@ export const topologyStyles = `
   background: var(--layoutBackground);
   border: 1px solid var(--borderColor);
   border-radius: 4px;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .PodLogsModal__toolbarSearch:focus-within {
@@ -2311,15 +2311,104 @@ export const topologyStyles = `
   color: var(--textColorSecondary);
   background: rgba(160, 170, 180, 0.08);
   border-color: rgba(160, 170, 180, 0.25);
-  opacity: 0.72;
 }
 
 .PodLogsModal__searchChip.is-disabled .PodLogsModal__searchChipText {
   text-decoration: line-through;
+  opacity: 0.72;
 }
 
-.PodLogsModal__searchChip.is-disabled button {
-  opacity: 1;
+.PodLogsModal__searchChip.is-disabled > button {
+  opacity: 0.72;
+}
+
+.PodLogsModal__searchChip.is-exclude {
+  color: #ff8a8a;
+  background: rgba(255, 107, 107, 0.15);
+  border-color: rgba(255, 107, 107, 0.35);
+}
+
+.PodLogsModal__searchChip.is-exclude:hover {
+  background: rgba(255, 107, 107, 0.22);
+  border-color: rgba(255, 107, 107, 0.52);
+}
+
+.PodLogsModal__searchChipPrefix {
+  font-size: 9px;
+  font-weight: 700;
+  margin-right: 3px;
+  opacity: 0.8;
+}
+
+.PodLogsModal__searchChip.is-orTarget {
+  border-color: rgba(75, 236, 160, 0.7);
+  box-shadow: 0 0 0 1px rgba(75, 236, 160, 0.3);
+}
+
+.PodLogsModal__orIndicator {
+  display: flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  color: #7fffbf;
+  background: rgba(75, 236, 160, 0.12);
+  border: 1px solid rgba(75, 236, 160, 0.35);
+  border-radius: 9px;
+  font-size: 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: pointer;
+  user-select: none;
+}
+
+.PodLogsModal__orIndicator:hover {
+  background: rgba(75, 236, 160, 0.2);
+}
+
+.PodLogsModal__chipMenu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 100;
+  margin-top: 4px;
+  min-width: 140px;
+  background: var(--mainBackground, #1e2030);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  padding: 4px 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.PodLogsModal__toolbar .PodLogsModal__searchChip .PodLogsModal__chipMenu button {
+  all: unset;
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 10px;
+  font-size: 11px;
+  color: var(--textColorPrimary, #cdd6f4);
+  cursor: pointer;
+  white-space: nowrap;
+  border-radius: 0;
+  border: none;
+  background: none;
+  min-width: 0;
+  height: auto;
+  margin: 0;
+}
+
+.PodLogsModal__toolbar .PodLogsModal__searchChip .PodLogsModal__chipMenu button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.PodLogsModal__toolbar .PodLogsModal__searchChip .PodLogsModal__chipMenu button.is-danger {
+  color: #ff8a8a;
+}
+
+.PodLogsModal__toolbar .PodLogsModal__searchChip .PodLogsModal__chipMenu button.is-danger:hover {
+  background: rgba(255, 107, 107, 0.15);
 }
 
 .PodLogsModal__toolbarActions {
@@ -2478,6 +2567,80 @@ export const topologyStyles = `
 .PodLogsModal__hiddenMenu {
   left: 44px;
   width: 360px;
+  max-height: none;
+  overflow: visible;
+}
+
+.PodLogsModal__hiddenList {
+  max-height: 140px;
+  overflow-y: auto;
+}
+
+.PodLogsModal__hiddenItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 4px 6px;
+  font-size: 11px;
+  border-radius: 3px;
+}
+
+.PodLogsModal__hiddenItem:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.PodLogsModal__hiddenItem > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.8;
+}
+
+.PodLogsModal__hiddenItem > button {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.6);
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.PodLogsModal__hiddenItem > button:hover {
+  color: #7fb4ff;
+  background: rgba(75, 123, 236, 0.2);
+  border-color: rgba(75, 123, 236, 0.4);
+}
+
+.PodLogsModal__hiddenActions {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--borderColor);
+  text-align: right;
+}
+
+.PodLogsModal__hiddenActions > button {
+  padding: 3px 10px;
+  font-size: 11px;
+  color: #ff8a8a;
+  background: rgba(255, 107, 107, 0.1);
+  border: 1px solid rgba(255, 107, 107, 0.3);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.PodLogsModal__hiddenActions > button:hover {
+  background: rgba(255, 107, 107, 0.2);
 }
 
 .PodLogsModal__rangeMenu {
