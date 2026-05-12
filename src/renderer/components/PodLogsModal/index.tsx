@@ -414,8 +414,8 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
       if (rangeOpen && rangeFilterRef.current && !rangeFilterRef.current.contains(target)) setRangeOpen(false);
       if (chipMenuOpen !== null) {
         const chipMenu = chipMenuRef.current;
-        const clickedChipText = (target as HTMLElement).closest?.(".PodLogsModal__searchChipText");
-        if (!clickedChipText && (!chipMenu || !chipMenu.contains(target))) setChipMenuOpen(null);
+        const clickedChipClickable = (target as HTMLElement).closest?.(".PodLogsModal__searchChipText, .PodLogsModal__searchChipPrefix");
+        if (!clickedChipClickable && (!chipMenu || !chipMenu.contains(target))) setChipMenuOpen(null);
       }
       if (hiddenMenuOpen && hiddenMenuRef.current && !hiddenMenuRef.current.contains(target)) setHiddenMenuOpen(false);
     }
@@ -1177,7 +1177,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
                 className={`PodLogsModal__searchChip${disabledChips.has(chip.id) ? " is-disabled" : ""}${chip.mode === "exclude" ? " is-exclude" : ""}${orTarget === chip.id ? " is-orTarget" : ""}`}
                 style={{ position: "relative" }}
               >
-                {chip.mode === "exclude" ? <span className="PodLogsModal__searchChipPrefix">NOT</span> : null}
+                {chip.mode === "exclude" ? <span className="PodLogsModal__searchChipPrefix" onClick={() => setChipMenuOpen((prev) => prev === chip.id ? null : chip.id)}>NOT</span> : null}
                 <span className="PodLogsModal__searchChipText" onClick={() => setChipMenuOpen((prev) => prev === chip.id ? null : chip.id)}>
                   {chip.value.includes(",") ? chip.value.split(",").join(" | ") : chip.value}
                 </span>

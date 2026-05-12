@@ -2338,6 +2338,7 @@ export const topologyStyles = `
   font-weight: 700;
   margin-right: 3px;
   opacity: 0.8;
+  cursor: pointer;
 }
 
 .PodLogsModal__searchChip.is-orTarget {
