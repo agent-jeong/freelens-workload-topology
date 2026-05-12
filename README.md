@@ -14,7 +14,6 @@ Instead of jumping between Ingress, Service, Deployment, Pod, ConfigMap, and Sec
 
 ![Pod Logs Modal](docs/assets/screenshot-log.png)
 
-
 ## Why Workload Topology
 
 Kubernetes relationships are spread across dozens of screens. This extension brings them together so you can answer questions like:
@@ -42,26 +41,68 @@ The extension uses the FreeLens renderer API and requires no extra sidecar or cl
 - Namespace-aware browsing with per-namespace layout persistence
 - CronJob/Job time-window filter (1h, 24h, 7d)
 - Group cards for Pods and Jobs with expand/collapse
+- Label-based filtering and resource name/kind search
+- Problems Only filter to show only warning/danger resources and their connections
+- Blast radius analysis to visualize the failure impact of a selected resource
 
-### Inspection & Debugging
-- **Detail panel** with resource summary, related Kubernetes Events, and JSON tree search
-- **YAML editor** with live diff, apply warnings, and direct Kubernetes API update
-- **Pod logs** with Live tail, previous logs, container filter, severity filter, keyword search, line wrap, duplicate hiding, and adaptive virtual scrolling
-- **AI analysis prompt** copy with auto-masked secrets (no external API calls)
-- **Blast radius** analysis to visualize the failure impact of a selected resource
+### Detail Panel
+- **Inspect tab** — resource summary, labels, Pod info (node, IP, image, restarts), Deployment replicas, Service ports, Ingress hosts, CronJob schedule
+- **JSON tab** — collapsible tree with search/query, click-to-copy values, expand/collapse all, Secret data auto-masking
+- **YAML tab** — live diff editor with apply warnings and direct Kubernetes API update (auto-removes `status` and `managedFields`)
+- **Events tab** — related Kubernetes Events with type badges, repeat counts, source, and timestamp
+- Resizable panel (drag from left edge)
+
+### Pod Logs
+- **Multi-pod log streaming** — up to 24 log streams displayed simultaneously
+- **Search chips** — persistent filter chips with AND/OR logic
+  - AND between chips, comma-separated OR within a chip
+  - Include or Exclude mode (switch via chip context menu)
+  - Disable/enable individual chips without deleting
+- **Pod filter** — select specific pods within a group
+- **Container filter** — filter by container (including init containers)
+- **Severity filter** — 6 levels: error, warning, info, debug, trace, unknown (auto-detected from log content and structured JSON logs)
+- **Time range filter** — date/time inputs for From/To bounds with Earliest/Latest edge selection and max line limits (100k, 200k, 500k, unlimited)
+- **Live tail** — real-time log streaming with auto-scroll toggle
+- **Previous logs** — view logs from prior container restarts
+- **Tail control** — progressive loading (100, 300, 1,000, 5,000 lines) with Load Older option
+- **Match navigation** — arrow keys to jump between search matches with match counter
+- **Hidden messages** — right-click to exclude specific log lines, restore individually or all at once
+- **Line wrap toggle** — on/off with adaptive virtual scrolling
+- **Download** — export filtered logs as `.txt` file
+- **JSON log parsing** — structured logs with trace ID extraction and logger name shortening
+- **ANSI stripping** — clean display of color-coded logs
+- **Stack trace detection** — auto-formatting of stack traces
+
+### Shell Command
+- Copy-to-clipboard `kubectl exec` command generation
+- Pod and container selection for multi-pod groups
+- Auto-completes `clear; (bash || ash || sh)` fallback sequence
+
+### AI Analysis
+- AI analysis prompt copy with auto-masked secrets (no external API calls)
+- Event-based cause hints for problem diagnosis
+- Paste-ready format for Claude or other AI tools
 
 ### Real-time Monitoring
-- **Live mode** with 4-second auto-refresh cycle and auto-scroll toggle
-- **Metrics-server integration** showing real-time CPU and memory usage per Pod
-- **Issue panel** with quick-jump to warning/danger resources and event-based cause hints
-- **Live notifications** for resource status changes
+- **Live mode** — 4-second auto-refresh cycle with visual indicator
+- **Metrics-server integration** — real-time CPU/memory usage per Pod with request/limit comparison and percentage indicators
+- **Issue panel** — up to 6 warning/danger resources with quick-jump navigation, expandable for more, hover tooltip with problem details
+- **Toast notifications** — auto-dismissing alerts for resource status changes (e.g., healthy → warning)
+- Graceful metrics fallback with diagnostic hints (not installed, forbidden, API unavailable, network error)
+
+### Context Menu (Right-Click)
+- Copy name / Copy JSON / Copy YAML
+- Open pod logs
+- Shell (copy kubectl exec command)
+- Restart Pod (with confirmation for groups)
+- Copy AI prompt
 
 ### Navigation & Interaction
-- Canvas pan, zoom, minimap, and grid toggle
-- Drag nodes to rearrange; Shift+drag to multi-select
+- Canvas pan, zoom (0.3x–3x), minimap with draggable viewport, and grid toggle
+- Drag nodes to rearrange; Shift+drag to multi-select (marquee)
 - Edge hover highlighting and clickable resource cards
-- Right-click context menu for quick actions
-- Label-based filtering
+- Reset layout (individual node or all)
+- Automatic columnar layout (Ingress → Service → Deployment → Pod → ConfigMap/Secret)
 
 ### Keyboard Shortcuts
 
@@ -79,6 +120,9 @@ The extension uses the FreeLens renderer API and requires no extra sidecar or cl
 | `Esc` | Close / Deselect |
 | `Shift+Drag` | Multi-select (marquee) |
 | `Right-click` | Context menu |
+| `↑` / `↓` | Navigate search matches (in log modal) |
+| `Enter` | Add search chip (in log modal) |
+| `Backspace` | Remove last chip (in log modal, when input is empty) |
 
 ## Installation
 
@@ -97,7 +141,7 @@ corepack pnpm build
 corepack pnpm pack
 ```
 
-Then install the generated `freelens-workload-topology-1.0.0.tgz` from the Extensions screen.
+Then install the generated `.tgz` from the Extensions screen.
 
 ## Usage
 
@@ -106,7 +150,18 @@ Then install the generated `freelens-workload-topology-1.0.0.tgz` from the Exten
 3. Select a namespace.
 4. Explore the topology graph — hover edges, click cards, drag nodes.
 5. Use the detail panel to inspect YAML, events, and logs.
-6. Press `?` to view all keyboard shortcuts.
+6. Right-click a resource for quick actions (logs, shell, AI analysis, restart).
+7. Press `?` to view all keyboard shortcuts.
+
+### Searching Logs
+
+1. Click a Pod or Pods group, then open **Pod Logs** from the detail panel or context menu.
+2. Type a keyword and press `Enter` to create a search chip.
+3. Add more chips for AND filtering, or click a chip → **+ OR condition** to add OR terms.
+4. Click a chip to access the menu: switch to Exclude mode, disable, or delete.
+5. Use the severity, container, and pod dropdowns to narrow results.
+6. Use the range filter for time-based log queries with date/time bounds.
+7. Toggle **Live** to tail logs in real-time, or **Previous** to view prior restart logs.
 
 ## Metrics Server
 
@@ -114,7 +169,7 @@ To display real-time CPU and memory usage on Pod tooltips, the cluster needs a r
 
 This extension does not install or modify cluster-wide metrics components. In production clusters, ask the cluster administrator to verify the metrics-server deployment, APIService status, RBAC, and cluster security policy.
 
-If metrics-server is not available, the topology continues to work normally without CPU/memory data.
+If metrics-server is not available, the topology continues to work normally without CPU/memory data. The extension provides diagnostic hints when metrics fail (not installed, forbidden, API unavailable, network error).
 
 ## Project Structure
 
@@ -133,8 +188,6 @@ src/
 electron.vite.config.ts  # Build configuration
 package.json             # Extension metadata and scripts
 ```
-
-At the moment, `src/renderer/index.tsx` is intentionally small (entry-only), while most implementation lives under `pages/`, `components/`, `topology/`, and `utils/`.
 
 ## Development
 
