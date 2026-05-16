@@ -375,6 +375,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
   const [selectedSeverities, setSelectedSeverities] = useState<Set<string>>(new Set());
   const [severityFilterOpen, setSeverityFilterOpen] = useState(false);
   const [wrapLogs, setWrapLogs] = useState(false);
+  const [timezone, setTimezone] = useState("Asia/Seoul");
   const [autoScroll, setAutoScroll] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [selectedMatchIndex, setSelectedMatchIndex] = useState(0);
@@ -1268,6 +1269,21 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
                 ))}
               </select>
             </label>
+            <label title="Timezone for displayed timestamps">
+              <span>TZ</span>
+              <select value={timezone} onChange={(event) => setTimezone(event.target.value)}>
+                <option value="Asia/Seoul">KST (+09)</option>
+                <option value="UTC">UTC (+00)</option>
+                <option value="America/New_York">EST (-05)</option>
+                <option value="America/Chicago">CST (-06)</option>
+                <option value="America/Los_Angeles">PST (-08)</option>
+                <option value="Europe/London">GMT (+00)</option>
+                <option value="Europe/Berlin">CET (+01)</option>
+                <option value="Asia/Tokyo">JST (+09)</option>
+                <option value="Asia/Shanghai">CST (+08)</option>
+                <option value="local">Local</option>
+              </select>
+            </label>
             <span className="PodLogsModal__olderStatus">
               {tailNoLimit ? "All available" : loadedTailLines.toLocaleString()} loaded
             </span>
@@ -1305,6 +1321,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
             hasActiveSearch={hasActiveSearch}
             selectedMatchIndex={selectedMatchIndex}
             wrapLogs={wrapLogs}
+            timezone={timezone}
             logBodyRef={logBodyRef}
             lineRefs={lineRefs}
             scrollRequest={rangeScrollRequest}

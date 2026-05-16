@@ -3,12 +3,40 @@ import { LOG_LINE_HEIGHT, LOG_OVERSCAN } from "../../constants";
 import type { PodLogLine } from "../../types";
 import { highlightLogText } from "./logHighlighter";
 
+function formatTimestamp(raw: string, timezone: string): string {
+  const date = new Date(raw);
+
+  if (Number.isNaN(date.getTime())) {
+    return raw.replace("T", " ").replace("Z", "");
+  }
+
+  const tz = timezone === "local" ? Intl.DateTimeFormat().resolvedOptions().timeZone : timezone;
+
+  const parts = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  const base = `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}:${get("second")}`;
+
+  const fracMatch = raw.match(/\.\d+/);
+  return fracMatch ? `${base}${fracMatch[0]}` : base;
+}
+
 export function VirtualLogList({
   lines,
   searchTerms,
   hasActiveSearch,
   selectedMatchIndex,
   wrapLogs,
+  timezone,
   logBodyRef,
   lineRefs,
   scrollRequest,
@@ -19,6 +47,7 @@ export function VirtualLogList({
   hasActiveSearch: boolean;
   selectedMatchIndex: number;
   wrapLogs: boolean;
+  timezone: string;
   logBodyRef: React.MutableRefObject<HTMLDivElement | null>;
   lineRefs: React.MutableRefObject<Array<HTMLDivElement | null>>;
   scrollRequest?: { edge: "top" | "bottom"; tick: number } | null;
@@ -176,7 +205,7 @@ export function VirtualLogList({
   }, [selectedMatchIndex, hasActiveSearch, wrapLogs, itemOffsets, containerHeight, lines.length, logBodyRef, lineRefs]);
 
   const renderLine = (line: PodLogLine, index: number, top: number) => {
-    const displayTimestamp = line.timestamp ? line.timestamp.replace("T", " ").replace("Z", "") : "";
+    const displayTimestamp = line.timestamp ? formatTimestamp(line.timestamp, timezone) : "";
     const displaySource = `${line.podName}/${line.containerName}`;
 
     return (
