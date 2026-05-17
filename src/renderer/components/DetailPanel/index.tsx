@@ -5,7 +5,7 @@ import { stringifyYaml, yamlDiff, yamlWarnings } from "../../utils/yaml";
 import { jsonMeaningRows } from "../../utils/json";
 import { buildAiAnalysisPrompt } from "../../utils/ai";
 import { causeHintsForEvents } from "../../topology/problems";
-import { DetailRow, ActionRow } from "./DetailRow";
+import { DetailRow, ActionRow, OwnerChainRow } from "./DetailRow";
 import { EventList } from "./EventList";
 import { JsonTree } from "./JsonTree";
 import { JsonMeaningModal } from "./JsonMeaningModal";
@@ -105,6 +105,16 @@ export function TopologyDetails({
     <DetailRow key="name" label="Name" value={node.name} onCopy={() => onCopy("name", node.name)} />,
     <DetailRow key="namespace" label="Namespace" value={node.namespace} onCopy={() => onCopy("namespace", node.namespace)} />
   ];
+
+  if (node.ownerChain?.length) {
+    detailRows.push(
+      <OwnerChainRow
+        key="ownerChain"
+        chain={node.ownerChain}
+        onCopy={() => onCopy("owner chain", node.ownerChain!.join(" -> "))}
+      />
+    );
+  }
 
   if (apiVersion) {
     detailRows.push(<DetailRow key="apiVersion" label="apiVersion" value={String(apiVersion)} onCopy={() => onCopy("apiVersion", String(apiVersion))} />);

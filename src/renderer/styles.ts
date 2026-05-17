@@ -1450,6 +1450,49 @@ export const topologyStyles = `
   white-space: nowrap;
 }
 
+.TopologyDetails__ownerChain {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px 14px 0;
+  font-size: 12px;
+}
+
+.TopologyDetails__ownerChain.is-copyable {
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.TopologyDetails__ownerChain.is-copyable:hover {
+  background: rgba(127, 180, 255, 0.08);
+}
+
+.TopologyDetails__ownerChain > span {
+  color: var(--textColorSecondary);
+}
+
+.TopologyDetails__ownerChain > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-width: 0;
+}
+
+.TopologyDetails__ownerChain strong {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.TopologyDetails__ownerChain em {
+  color: var(--textColorSecondary);
+  font-style: normal;
+}
+
 .TopologyDetails__json {
   flex: 1;
   min-height: 180px;

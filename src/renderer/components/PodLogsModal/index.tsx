@@ -8,12 +8,15 @@ import { logLines, logMessageKey, podLogTargets } from "./logParser";
 const { K8sApi } = Renderer;
 
 const LOG_BUFFER_LINES = 20000;
-const RANGE_LINE_LIMIT_OPTIONS = [100000, 200000, 500000, 0] as const;
+const RANGE_LINE_LIMIT_OPTIONS = [50000, 100000, 200000, 0] as const;
 type RangeLineLimit = (typeof RANGE_LINE_LIMIT_OPTIONS)[number];
 const LOAD_OLDER_STEPS = [100, 300, 1000, 3000, 10000, 30000, 100000, 200000, 500000] as const;
 const LOG_FETCH_CONCURRENCY = 6;
-const RANGE_FETCH_CONCURRENCY = 3;
-const RANGE_LIMIT_BYTES_PER_STREAM = 25 * 1024 * 1024;
+const RANGE_FETCH_CONCURRENCY = 2;
+const MAX_LOG_STREAMS = 24;
+const MAX_RANGE_LOG_STREAMS = 12;
+const RANGE_CONFIRM_HOURS = 6;
+const RANGE_LIMIT_BYTES_PER_STREAM = 8 * 1024 * 1024;
 const LOG_TIMESTAMP_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[^\s]*)\s/;
 
 type PodLogFetchOptions = PodLogOptions & {
@@ -386,9 +389,9 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
   const [rangeLoading, setRangeLoading] = useState(false);
   const [rangeBounds, setRangeBounds] = useState<{ fromMs: number; toMs: number; label: string } | null>(null);
   const [appliedRangeResultEdge, setAppliedRangeResultEdge] = useState<"earliest" | "latest">("earliest");
-  const [appliedRangeLineLimit, setAppliedRangeLineLimit] = useState<RangeLineLimit>(100000);
+  const [appliedRangeLineLimit, setAppliedRangeLineLimit] = useState<RangeLineLimit>(50000);
   const [rangeResultEdge, setRangeResultEdge] = useState<"earliest" | "latest">("earliest");
-  const [rangeLineLimit, setRangeLineLimit] = useState<RangeLineLimit>(100000);
+  const [rangeLineLimit, setRangeLineLimit] = useState<RangeLineLimit>(50000);
   const [rangeMessage, setRangeMessage] = useState<string | null>(null);
   const logBodyRef = useRef<HTMLDivElement | null>(null);
   const lineRefs = useRef<Array<HTMLDivElement | null>>([]);
@@ -436,7 +439,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
 
     let cancelled = false;
     const targets = podLogTargets(node);
-    const visibleTargets = targets.slice(0, 24);
+    const visibleTargets = targets.slice(0, MAX_LOG_STREAMS);
 
     setLimitMessage(targets.length > visibleTargets.length ? `Showing first ${visibleTargets.length} of ${targets.length} log streams.` : null);
     lastTimestampRef.current = null;
@@ -828,10 +831,10 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
     }
 
     const targets = podLogTargets(node);
-    const visibleTargets = targets.slice(0, 24);
+    const visibleTargets = targets.slice(0, MAX_RANGE_LOG_STREAMS);
     const hours = (toDate.getTime() - fromDate.getTime()) / 3600000;
 
-    if (hours > 24) {
+    if (hours > RANGE_CONFIRM_HOURS || visibleTargets.length > 6) {
       const confirmed = window.confirm(`This range is ${Math.round(hours)} hours across ${visibleTargets.length} stream(s). Kubernetes will return everything after From and the extension will filter To locally. Continue?`);
 
       if (!confirmed) {
@@ -848,7 +851,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
     setLive(false);
     setPrevious(false);
     setRangeMessage(`Loading range logs from ${rangeFrom.replace("T", " ")} to ${rangeTo.replace("T", " ")} · ${visibleTargets.length} stream(s).`);
-    setLimitMessage(targets.length > visibleTargets.length ? `Showing first ${visibleTargets.length} of ${targets.length} log streams.` : null);
+    setLimitMessage(targets.length > visibleTargets.length ? `Showing first ${visibleTargets.length} of ${targets.length} log streams for range queries.` : null);
     lastTimestampRef.current = null;
 
     try {

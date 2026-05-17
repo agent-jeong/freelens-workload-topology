@@ -68,6 +68,20 @@ export function filterRecentJobs(jobs: KubeObjectLike[], hours: number) {
     .sort((left, right) => objectTime(right) - objectTime(left));
 }
 
+function objectKey(object: KubeObjectLike): string {
+  return `${getNamespace(object)}:${getName(object)}`;
+}
+
+function resourceLabel(kind: string, name: string): string {
+  return `${kind}/${name}`;
+}
+
+function ownerLabel(object: KubeObjectLike): string | undefined {
+  const owner = object.metadata?.ownerReferences?.[0];
+
+  return owner?.kind && owner.name ? resourceLabel(owner.kind, owner.name) : undefined;
+}
+
 export function buildTopology(resources: ResourceSet, cronJobWindowHours: number) {
   const { ingresses, services, deployments, cronJobs, jobs, pods, configMaps, secrets } = resources;
   const nodes: TopologyNode[] = [];
@@ -79,6 +93,46 @@ export function buildTopology(resources: ResourceSet, cronJobWindowHours: number
   const allVisibleJobs = filterRecentJobs(jobs, cronJobWindowHours);
   const sortedCronJobs = [...cronJobs].sort((a, b) => getName(a).localeCompare(getName(b)));
   const jobsByCronJob = new Map<string, KubeObjectLike[]>();
+  const visibleJobByKey = new Map(allVisibleJobs.map((job) => [objectKey(job), job]));
+  const serviceByKey = new Map(services.map((service) => [objectKey(service), service]));
+  const configMapByKey = new Map(configMaps.map((configMap) => [objectKey(configMap), configMap]));
+  const secretByKey = new Map(secrets.map((secret) => [objectKey(secret), secret]));
+  const podReferences = new Map<KubeObjectLike, ReturnType<typeof podReferenceNames>>();
+  const firstPodByConfigMapKey = new Map<string, KubeObjectLike>();
+  const firstPodBySecretKey = new Map<string, KubeObjectLike>();
+  const edgeIds = new Set<string>();
+  const pushEdge = (from: string, to: string) => {
+    const id = `${from}->${to}`;
+
+    if (edgeIds.has(id)) {
+      return;
+    }
+
+    edgeIds.add(id);
+    edges.push({ id, from, to });
+  };
+
+  for (const pod of pods) {
+    const references = podReferenceNames(pod);
+
+    podReferences.set(pod, references);
+
+    for (const configMapName of references.configMaps) {
+      const key = `${getNamespace(pod)}:${configMapName}`;
+
+      if (!firstPodByConfigMapKey.has(key)) {
+        firstPodByConfigMapKey.set(key, pod);
+      }
+    }
+
+    for (const secretName of references.secrets) {
+      const key = `${getNamespace(pod)}:${secretName}`;
+
+      if (!firstPodBySecretKey.has(key)) {
+        firstPodBySecretKey.set(key, pod);
+      }
+    }
+  }
 
   for (const job of allVisibleJobs) {
     const cronJobName = ownerName(job, "CronJob");
@@ -98,12 +152,76 @@ export function buildTopology(resources: ResourceSet, cronJobWindowHours: number
     rowByDeployment.set(nodeId("Deployment", deployment), index);
   });
 
-  const rowForPod = (pod: KubeObjectLike, fallbackIndex: number) => {
-    const deployment = sortedDeployments.find((candidate) =>
+  const deploymentByPod = new Map<KubeObjectLike, KubeObjectLike>();
+  const deploymentsByPod = new Map<KubeObjectLike, KubeObjectLike[]>();
+
+  pods.forEach((pod) => {
+    const matchingDeployments = sortedDeployments.filter((candidate) =>
       getNamespace(candidate) === getNamespace(pod) && labelsMatch(deploymentSelector(candidate), getLabels(pod))
     );
+    const deployment = matchingDeployments[0];
+
+    if (deployment) {
+      deploymentByPod.set(pod, deployment);
+      deploymentsByPod.set(pod, matchingDeployments);
+    }
+  });
+
+  const rowForPod = (pod: KubeObjectLike, fallbackIndex: number) => {
+    const deployment = deploymentByPod.get(pod);
 
     return deployment ? rowByDeployment.get(nodeId("Deployment", deployment)) ?? fallbackIndex : fallbackIndex;
+  };
+  const ownerChainForPod = (pod: KubeObjectLike): string[] => {
+    const chain: string[] = [];
+    const jobName = ownerName(pod, "Job");
+
+    if (jobName) {
+      const job = visibleJobByKey.get(`${getNamespace(pod)}:${jobName}`);
+      const cronJobName = job ? ownerName(job, "CronJob") : undefined;
+
+      if (cronJobName) {
+        chain.push(resourceLabel("CronJob", cronJobName));
+      }
+
+      chain.push(resourceLabel("Job", jobName));
+      chain.push(resourceLabel("Pod", getName(pod)));
+      return chain;
+    }
+
+    const deployment = deploymentByPod.get(pod);
+
+    if (deployment) {
+      chain.push(resourceLabel("Deployment", getName(deployment)));
+    }
+
+    const directOwner = ownerLabel(pod);
+
+    if (directOwner && !chain.includes(directOwner)) {
+      chain.push(directOwner);
+    }
+
+    chain.push(resourceLabel("Pod", getName(pod)));
+
+    return chain;
+  };
+  const ownerChainForPodGroup = (pods: KubeObjectLike[], fallbackLabel: string): string[] | undefined => {
+    if (pods.length === 0) {
+      return undefined;
+    }
+
+    const firstChain = ownerChainForPod(pods[0]);
+
+    if (pods.every((pod) => {
+      const chain = ownerChainForPod(pod);
+      const prefix = chain.slice(0, -1);
+
+      return prefix.length === firstChain.length - 1 && prefix.every((value, index) => value === firstChain[index]);
+    })) {
+      return [...firstChain.slice(0, -1), fallbackLabel];
+    }
+
+    return [fallbackLabel];
   };
 
   const podRows = new Map<KubeObjectLike, number>();
@@ -219,18 +337,14 @@ export function buildTopology(resources: ResourceSet, cronJobWindowHours: number
   });
 
   configMaps.forEach((configMap, index) => {
-    const referencingPod = pods.find((pod) =>
-      getNamespace(pod) === getNamespace(configMap) && podReferenceNames(pod).configMaps.includes(getName(configMap))
-    );
+    const referencingPod = firstPodByConfigMapKey.get(objectKey(configMap));
     const row = referencingPod ? podRows.get(referencingPod) ?? index : index;
 
     track(row, "ConfigMap");
   });
 
   secrets.forEach((secret, index) => {
-    const referencingPod = pods.find((pod) =>
-      getNamespace(pod) === getNamespace(secret) && podReferenceNames(pod).secrets.includes(getName(secret))
-    );
+    const referencingPod = firstPodBySecretKey.get(objectKey(secret));
     const row = referencingPod ? podRows.get(referencingPod) ?? index : index;
 
     track(row, "Secret");
@@ -320,7 +434,7 @@ export function buildTopology(resources: ResourceSet, cronJobWindowHours: number
       editable: false
     });
 
-    edges.push({ id: `${lbId}->${ingressId}`, from: lbId, to: ingressId });
+    pushEdge(lbId, ingressId);
   });
 
   ingresses.forEach((ingress, index) => {
@@ -461,7 +575,8 @@ export function buildTopology(resources: ResourceSet, cronJobWindowHours: number
               object: podGroupObject(getNamespace(cronJob), `${activePods.length} active pods`, activePods),
               editable: false,
               problems: podGroupProblemReasons(activePods),
-              pods: activePods
+              pods: activePods,
+              ownerChain: ownerChainForPodGroup(activePods, resourceLabel("Pods", `${activePods.length} active`))
             });
           }
 
@@ -479,7 +594,8 @@ export function buildTopology(resources: ResourceSet, cronJobWindowHours: number
               object: podGroupObject(getNamespace(cronJob), `${completedPods.length} completed pods`, completedPods),
               editable: false,
               problems: podGroupProblemReasons(completedPods),
-              pods: completedPods
+              pods: completedPods,
+              ownerChain: ownerChainForPodGroup(completedPods, resourceLabel("Pods", `${completedPods.length} completed`))
             });
           }
         }
@@ -505,7 +621,8 @@ export function buildTopology(resources: ResourceSet, cronJobWindowHours: number
         object: podGroupObject(getNamespace(firstPod), name, rowPods),
         editable: false,
         problems: podGroupProblemReasons(rowPods),
-        pods: rowPods
+        pods: rowPods,
+        ownerChain: ownerChainForPodGroup(rowPods, resourceLabel("Pods", name))
       });
       return;
     }
@@ -523,15 +640,14 @@ export function buildTopology(resources: ResourceSet, cronJobWindowHours: number
         object: pod,
         editable: true,
         problems: podProblemReasons(pod),
-        pods: [pod]
+        pods: [pod],
+        ownerChain: ownerChainForPod(pod)
       });
     });
   });
 
   configMaps.forEach((configMap, index) => {
-    const referencingPod = pods.find((pod) =>
-      getNamespace(pod) === getNamespace(configMap) && podReferenceNames(pod).configMaps.includes(getName(configMap))
-    );
+    const referencingPod = firstPodByConfigMapKey.get(objectKey(configMap));
     const row = referencingPod ? podRows.get(referencingPod) ?? index : index;
 
     nodes.push({
@@ -549,9 +665,7 @@ export function buildTopology(resources: ResourceSet, cronJobWindowHours: number
   });
 
   secrets.forEach((secret, index) => {
-    const referencingPod = pods.find((pod) =>
-      getNamespace(pod) === getNamespace(secret) && podReferenceNames(pod).secrets.includes(getName(secret))
-    );
+    const referencingPod = firstPodBySecretKey.get(objectKey(secret));
     const row = referencingPod ? podRows.get(referencingPod) ?? index : index;
 
     nodes.push({
@@ -569,9 +683,11 @@ export function buildTopology(resources: ResourceSet, cronJobWindowHours: number
   });
 
   for (const ingress of ingresses) {
-    for (const service of services) {
-      if (getNamespace(ingress) === getNamespace(service) && ingressServiceNames(ingress).includes(getName(service))) {
-        edges.push({ id: `${nodeId("Ingress", ingress)}->${nodeId("Service", service)}`, from: nodeId("Ingress", ingress), to: nodeId("Service", service) });
+    for (const serviceName of ingressServiceNames(ingress)) {
+      const service = serviceByKey.get(`${getNamespace(ingress)}:${serviceName}`);
+
+      if (service) {
+        pushEdge(nodeId("Ingress", ingress), nodeId("Service", service));
       }
     }
   }
@@ -579,21 +695,16 @@ export function buildTopology(resources: ResourceSet, cronJobWindowHours: number
   for (const service of services) {
     for (const deployment of deployments) {
       if (getNamespace(service) === getNamespace(deployment) && labelsMatch(serviceSelector(service), deploymentTemplateLabels(deployment))) {
-        edges.push({ id: `${nodeId("Service", service)}->${nodeId("Deployment", deployment)}`, from: nodeId("Service", service), to: nodeId("Deployment", deployment) });
+        pushEdge(nodeId("Service", service), nodeId("Deployment", deployment));
       }
     }
   }
 
-  for (const deployment of deployments) {
-    for (const pod of pods) {
-      if (getNamespace(deployment) === getNamespace(pod) && labelsMatch(deploymentSelector(deployment), getLabels(pod))) {
-        const to = groupedPodNodeByPod.get(pod) ?? nodeId("Pod", pod);
-        const id = `${nodeId("Deployment", deployment)}->${to}`;
+  for (const pod of pods) {
+    for (const deployment of deploymentsByPod.get(pod) ?? []) {
+      const to = groupedPodNodeByPod.get(pod) ?? nodeId("Pod", pod);
 
-        if (!edges.some((edge) => edge.id === id)) {
-          edges.push({ id, from: nodeId("Deployment", deployment), to });
-        }
-      }
+      pushEdge(nodeId("Deployment", deployment), to);
     }
   }
 
@@ -604,14 +715,14 @@ export function buildTopology(resources: ResourceSet, cronJobWindowHours: number
       const cronJobKey = `${getNamespace(cronJob)}:${getName(cronJob)}`;
       const cronJobId = nodeId("CronJob", cronJob);
 
-      edges.push({ id: `${groupId}->${cronJobId}`, from: groupId, to: cronJobId });
+      pushEdge(groupId, cronJobId);
 
       const cronJobJobs = jobsByCronJob.get(cronJobKey) ?? [];
 
       if (cronJobJobs.length > 0) {
         const jobsId = `Jobs:${cronJobKey}`;
 
-        edges.push({ id: `${cronJobId}->${jobsId}`, from: cronJobId, to: jobsId });
+        pushEdge(cronJobId, jobsId);
 
         const allJobPods = cronJobJobs.flatMap((job) => podsByJob.get(`${getNamespace(job)}:${getName(job)}`) ?? []);
 
@@ -621,12 +732,12 @@ export function buildTopology(resources: ResourceSet, cronJobWindowHours: number
 
           if (activePods.length > 0) {
             const activeId = `Pods:${cronJobKey}:active`;
-            edges.push({ id: `${jobsId}->${activeId}`, from: jobsId, to: activeId });
+            pushEdge(jobsId, activeId);
           }
 
           if (completedPods.length > 0) {
             const completedId = `Pods:${cronJobKey}:completed`;
-            edges.push({ id: `${jobsId}->${completedId}`, from: jobsId, to: completedId });
+            pushEdge(jobsId, completedId);
           }
         }
       }
@@ -634,13 +745,13 @@ export function buildTopology(resources: ResourceSet, cronJobWindowHours: number
   }
 
   for (const pod of pods) {
-    const references = podReferenceNames(pod);
+    const references = podReferences.get(pod) ?? { configMaps: [], secrets: [] };
 
     const jobName = ownerName(pod, "Job");
     let podFrom: string;
 
     if (jobName) {
-      const job = allVisibleJobs.find((j) => getName(j) === jobName && getNamespace(j) === getNamespace(pod));
+      const job = visibleJobByKey.get(`${getNamespace(pod)}:${jobName}`);
       const cronJobName = job ? ownerName(job, "CronJob") : undefined;
 
       podFrom = cronJobName ? `Pods:${getNamespace(pod)}:${cronJobName}:${pod.status?.phase === "Succeeded" ? "completed" : "active"}` : groupedPodNodeByPod.get(pod) ?? nodeId("Pod", pod);
@@ -648,23 +759,19 @@ export function buildTopology(resources: ResourceSet, cronJobWindowHours: number
       podFrom = groupedPodNodeByPod.get(pod) ?? nodeId("Pod", pod);
     }
 
-    for (const configMap of configMaps) {
-      if (getNamespace(pod) === getNamespace(configMap) && references.configMaps.includes(getName(configMap))) {
-        const id = `${podFrom}->${nodeId("ConfigMap", configMap)}`;
+    for (const configMapName of references.configMaps) {
+      const configMap = configMapByKey.get(`${getNamespace(pod)}:${configMapName}`);
 
-        if (!edges.some((edge) => edge.id === id)) {
-          edges.push({ id, from: podFrom, to: nodeId("ConfigMap", configMap) });
-        }
+      if (configMap) {
+        pushEdge(podFrom, nodeId("ConfigMap", configMap));
       }
     }
 
-    for (const secret of secrets) {
-      if (getNamespace(pod) === getNamespace(secret) && references.secrets.includes(getName(secret))) {
-        const id = `${podFrom}->${nodeId("Secret", secret)}`;
+    for (const secretName of references.secrets) {
+      const secret = secretByKey.get(`${getNamespace(pod)}:${secretName}`);
 
-        if (!edges.some((edge) => edge.id === id)) {
-          edges.push({ id, from: podFrom, to: nodeId("Secret", secret) });
-        }
+      if (secret) {
+        pushEdge(podFrom, nodeId("Secret", secret));
       }
     }
   }

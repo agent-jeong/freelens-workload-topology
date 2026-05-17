@@ -52,6 +52,11 @@ import { readStoredLayout, writeStoredLayout } from "../utils/layout";
 const { K8sApi } = Renderer;
 const viewportContentPadding = 160;
 
+type ListResult<T> = {
+  items: T[];
+  error?: string;
+};
+
 function clamp(value: number, min: number, max: number): number {
   if (max < min) {
     return min;
@@ -131,15 +136,17 @@ async function fetchPodMetrics(namespace: string): Promise<MetricsResult> {
   }
 }
 
-async function listOrEmpty(api?: { list: () => Promise<unknown> }) {
+async function listResource<T>(label: string, api?: { list: () => Promise<unknown> }): Promise<ListResult<T>> {
   try {
     if (!api) {
-      return [];
+      return { items: [], error: `${label}: API is not available` };
     }
 
-    return await api.list() as KubeObjectLike[];
-  } catch {
-    return [];
+    return { items: await api.list() as T[] };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown error";
+
+    return { items: [], error: `${label}: ${message}` };
   }
 }
 
@@ -204,6 +211,7 @@ export function WorkloadTopologyPage() {
   const [copied, setCopied] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [resourceLoadWarning, setResourceLoadWarning] = useState<string | null>(null);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [manualPositions, setManualPositions] = useState<Record<string, { x: number; y: number }>>({});
@@ -229,25 +237,49 @@ export function WorkloadTopologyPage() {
 
     try {
       const [namespaceList, ingresses, services, deployments, cronJobs, jobs, pods, configMaps, secrets, events] = await Promise.all([
-        listOrEmpty(K8sApi.namespacesApi),
-        listOrEmpty(K8sApi.ingressApi),
-        listOrEmpty(K8sApi.serviceApi),
-        listOrEmpty(K8sApi.deploymentApi),
-        listOrEmpty(K8sApi.cronJobApi),
-        listOrEmpty(K8sApi.jobApi),
-        listOrEmpty(K8sApi.podsApi),
-        listOrEmpty(K8sApi.configMapApi),
-        listOrEmpty(K8sApi.secretsApi),
-        listOrEmpty((K8sApi as any).eventApi ?? (K8sApi as any).eventsApi)
+        listResource<KubeObjectLike>("Namespaces", K8sApi.namespacesApi),
+        listResource<KubeObjectLike>("Ingresses", K8sApi.ingressApi),
+        listResource<KubeObjectLike>("Services", K8sApi.serviceApi),
+        listResource<KubeObjectLike>("Deployments", K8sApi.deploymentApi),
+        listResource<KubeObjectLike>("CronJobs", K8sApi.cronJobApi),
+        listResource<KubeObjectLike>("Jobs", K8sApi.jobApi),
+        listResource<KubeObjectLike>("Pods", K8sApi.podsApi),
+        listResource<KubeObjectLike>("ConfigMaps", K8sApi.configMapApi),
+        listResource<KubeObjectLike>("Secrets", K8sApi.secretsApi),
+        listResource<KubeEventLike>("Events", (K8sApi as any).eventApi ?? (K8sApi as any).eventsApi)
       ]);
+      const failures = [namespaceList, ingresses, services, deployments, cronJobs, jobs, pods, configMaps, secrets, events]
+        .map((result) => result.error)
+        .filter((message): message is string => Boolean(message));
 
       const nextNamespaces = namespaceOptions(
-        { ingresses, services, deployments, cronJobs, jobs, pods, configMaps, secrets, events: events as KubeEventLike[] },
-        namespaceList.map(getName)
+        {
+          ingresses: ingresses.items,
+          services: services.items,
+          deployments: deployments.items,
+          cronJobs: cronJobs.items,
+          jobs: jobs.items,
+          pods: pods.items,
+          configMaps: configMaps.items,
+          secrets: secrets.items,
+          events: events.items
+        },
+        namespaceList.items.map(getName)
       );
 
-      setResources({ ingresses, services, deployments, cronJobs, jobs, pods, configMaps, secrets, events: events as KubeEventLike[] });
+      setResources({
+        ingresses: ingresses.items,
+        services: services.items,
+        deployments: deployments.items,
+        cronJobs: cronJobs.items,
+        jobs: jobs.items,
+        pods: pods.items,
+        configMaps: configMaps.items,
+        secrets: secrets.items,
+        events: events.items
+      });
       setNamespaces(nextNamespaces);
+      setResourceLoadWarning(failures.length > 0 ? `Some resources could not be loaded: ${failures.join("; ")}` : null);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Failed to load Kubernetes resources");
     } finally {
@@ -287,9 +319,7 @@ export function WorkloadTopologyPage() {
       if (cancelled) return;
 
       if (result.ok) {
-        if (result.data.length > 0) {
-          setPodMetrics(new Map(result.data.map((m) => [m.podName, m])));
-        }
+        setPodMetrics(new Map(result.data.map((m) => [m.podName, m])));
         setMetricsHint(null);
       } else {
         setMetricsHint(result.reason);
@@ -989,6 +1019,7 @@ export function WorkloadTopologyPage() {
       </div>
 
       {error ? <div className="WorkloadTopology__error">{error}</div> : null}
+      {resourceLoadWarning ? <div className="WorkloadTopology__error">{resourceLoadWarning}</div> : null}
       {metricsHint ? (
         <div className="WorkloadTopology__metricsHint">
           <button type="button" className="WorkloadTopology__metricsHintClose" onClick={() => setMetricsHint(null)} aria-label="Dismiss">&times;</button>

@@ -93,6 +93,7 @@ export type TopologyNode = {
   editable: boolean;
   problems?: ProblemReason[];
   pods?: KubeObjectLike[];
+  ownerChain?: string[];
 };
 
 export type TopologyEdge = {

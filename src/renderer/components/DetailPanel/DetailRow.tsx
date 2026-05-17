@@ -29,3 +29,19 @@ export function ActionRow({ label, value, onClick }: { label: string; value: str
     </div>
   );
 }
+
+export function OwnerChainRow({ chain, onCopy }: { chain: string[]; onCopy?: () => void }) {
+  return (
+    <div className={`TopologyDetails__ownerChain${onCopy ? " is-copyable" : ""}`} onClick={onCopy} title={onCopy ? "Click to copy owner chain" : chain.join(" -> ")}>
+      <span>Owner Chain</span>
+      <div>
+        {chain.map((item, index) => (
+          <React.Fragment key={`${item}:${index}`}>
+            <strong>{item}</strong>
+            {index < chain.length - 1 ? <em>→</em> : null}
+          </React.Fragment>
+        ))}
+      </div>
+    </div>
+  );
+}
