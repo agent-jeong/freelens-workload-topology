@@ -2986,6 +2986,19 @@ export const topologyStyles = `
   border: 1px solid var(--borderColor);
   border-radius: 4px;
   cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s, box-shadow 0.15s;
+}
+
+.PodLogsModal__toolbar button:hover:not(:disabled):not(.is-active):not(.is-open) {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.PodLogsModal__toolbar button.is-open {
+  color: #7fb4ff;
+  border-color: #4b7bec;
+  background: rgba(75, 123, 236, 0.12);
+  box-shadow: 0 0 0 1px rgba(75, 123, 236, 0.25);
 }
 
 .PodLogsModal__toolbar .PodLogsModal__searchChip button {
@@ -3009,7 +3022,14 @@ export const topologyStyles = `
 .PodLogsModal__toolbar button.is-active {
   color: #72c98f;
   border-color: #31a66a;
-  background: rgba(49, 166, 106, 0.12);
+  background: rgba(49, 166, 106, 0.15);
+  box-shadow: 0 0 0 1px rgba(49, 166, 106, 0.3);
+  font-weight: 600;
+}
+
+.PodLogsModal__toolbar button.is-active:hover {
+  background: rgba(49, 166, 106, 0.22);
+  border-color: #3dbe78;
 }
 
 .PodLogsModal__toolbar .PodLogsModal__rangeMode button.is-active {

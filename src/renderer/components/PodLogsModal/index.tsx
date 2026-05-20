@@ -1125,7 +1125,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
               </div>
             ) : null}
             <div className="PodLogsModal__rangeFilter" ref={rangeFilterRef}>
-              <button type="button" className={rangeActive ? "is-active" : ""} onClick={() => setRangeOpen((value) => !value)}>
+              <button type="button" className={`${rangeActive ? "is-active" : ""}${rangeOpen ? " is-open" : ""}`} onClick={() => setRangeOpen((value) => !value)}>
                 Time Range
               </button>
               {rangeOpen ? (
