@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import type { TopologyNode, KubeObjectLike } from "../types";
 import { getName, getNamespace } from "../utils/kube";
 import { podContainers } from "./PodLogsModal/logParser";
@@ -71,18 +71,20 @@ export function PodShellModal({ node, onClose }: { node: TopologyNode; onClose: 
     setCopyError("");
   }, [selectedPod, container]);
 
-  useEffect(() => {
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        event.stopPropagation();
-        onClose();
-      }
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  const handleKeyDown = useCallback((event: KeyboardEvent) => {
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      onCloseRef.current();
     }
+  }, []);
 
+  useEffect(() => {
     document.addEventListener("keydown", handleKeyDown, true);
-
     return () => document.removeEventListener("keydown", handleKeyDown, true);
-  }, [onClose]);
+  }, [handleKeyDown]);
 
   async function copyCommand() {
     if (!canCopy) return;

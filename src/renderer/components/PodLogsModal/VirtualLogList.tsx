@@ -66,15 +66,21 @@ export function VirtualLogList({
   useEffect(() => {
     const el = logBodyRef.current;
     if (!el) return;
+    let resizeRaf: number | null = null;
     setContainerHeight(el.clientHeight);
     setContainerWidth(el.clientWidth);
     const ro = new ResizeObserver(() => {
-      setContainerHeight(el.clientHeight);
-      setContainerWidth(el.clientWidth);
+      if (resizeRaf !== null) cancelAnimationFrame(resizeRaf);
+      resizeRaf = requestAnimationFrame(() => {
+        resizeRaf = null;
+        setContainerHeight(el.clientHeight);
+        setContainerWidth(el.clientWidth);
+      });
     });
     ro.observe(el);
     return () => {
       ro.disconnect();
+      if (resizeRaf !== null) cancelAnimationFrame(resizeRaf);
       if (scrollRafRef.current !== null) cancelAnimationFrame(scrollRafRef.current);
     };
   }, []);

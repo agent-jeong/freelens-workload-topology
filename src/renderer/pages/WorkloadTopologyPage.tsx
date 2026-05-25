@@ -25,17 +25,10 @@ import { connectedNodeIds } from "../topology/edges";
 import { causeHintsForEvents, issueSeverityRank } from "../topology/problems";
 import type {
   ContextMenuItem,
-  KubeEventLike,
-  KubeObjectLike,
-  MetricsResult,
-  PodMetrics,
-  ResourceSet,
   TopologyNode,
-  TopologyStatus,
   ViewportSize
 } from "../types";
 import { buildAiAnalysisPrompt } from "../utils/ai";
-import { parseCpu, parseMem } from "../utils/format";
 import { eventsForNode } from "../utils/events";
 import {
   apiForKind,
@@ -48,14 +41,13 @@ import {
   visibleResourceCount
 } from "../utils/kube";
 import { readStoredLayout, writeStoredLayout } from "../utils/layout";
+import { useKubeResources } from "../hooks/useKubeResources";
+import { useTopologyMetrics } from "../hooks/useTopologyMetrics";
+import { useStatusToasts } from "../hooks/useStatusToasts";
+import { useTopologyKeyboard } from "../hooks/useTopologyKeyboard";
 
 const { K8sApi } = Renderer;
 const viewportContentPadding = 160;
-
-type ListResult<T> = {
-  items: T[];
-  error?: string;
-};
 
 function clamp(value: number, min: number, max: number): number {
   if (max < min) {
@@ -80,74 +72,6 @@ function useTopologyStyles() {
       styleElement?.remove();
     };
   }, []);
-}
-
-async function fetchPodMetrics(namespace: string): Promise<MetricsResult> {
-  try {
-    const api = K8sApi.podsApi as any;
-    const path = `/apis/metrics.k8s.io/v1beta1/namespaces/${namespace}/pods`;
-
-    // Use relative path through same-origin proxy
-    const req = api.request;
-    const apiBase = req?.config?.apiBase ?? "/api-kube";
-    const url = `${apiBase}${path}`;
-
-    const r = await fetch(url);
-    if (!r.ok) {
-      if (r.status === 404) return { ok: false, reason: "not-installed" };
-      if (r.status === 503) return { ok: false, reason: "api-unavailable" };
-      if (r.status === 403) return { ok: false, reason: "forbidden" };
-      return { ok: false, reason: `http-${r.status}` };
-    }
-    const response = await r.json();
-
-    if (!response) return { ok: false, reason: "empty-response" };
-
-    const items = response?.items ?? [];
-
-    if (!Array.isArray(items)) return { ok: false, reason: "invalid-response" };
-
-    // metrics-server installed but returning errors (e.g. kubelet TLS issue)
-    if (items.length === 0) {
-      return { ok: true, data: [] };
-    }
-
-    const data = items.map((item: any) => {
-      const containers = item.containers ?? [];
-      let cpu = 0;
-      let mem = 0;
-
-      for (const c of containers) {
-        if (c.usage?.cpu) cpu += parseCpu(c.usage.cpu);
-        if (c.usage?.memory) mem += parseMem(c.usage.memory);
-      }
-
-      return {
-        podName: item.metadata?.name ?? "",
-        namespace: item.metadata?.namespace ?? namespace,
-        cpu,
-        memory: mem,
-      };
-    });
-
-    return { ok: true, data };
-  } catch {
-    return { ok: false, reason: "network-error" };
-  }
-}
-
-async function listResource<T>(label: string, api?: { list: () => Promise<unknown> }): Promise<ListResult<T>> {
-  try {
-    if (!api) {
-      return { items: [], error: `${label}: API is not available` };
-    }
-
-    return { items: await api.list() as T[] };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "unknown error";
-
-    return { items: [], error: `${label}: ${message}` };
-  }
 }
 
 async function copyText(value: string) {
@@ -181,27 +105,23 @@ async function copyText(value: string) {
 export function WorkloadTopologyPage() {
   useTopologyStyles();
 
-  const [resources, setResources] = useState<ResourceSet>({
-    ingresses: [],
-    services: [],
-    deployments: [],
-    cronJobs: [],
-    jobs: [],
-    pods: [],
-    configMaps: [],
-    secrets: [],
-    events: []
-  });
-  const [namespaces, setNamespaces] = useState<string[]>(["default"]);
+  // --- Extracted hooks ---
+  const {
+    resources, namespaces, selectedNamespace, setSelectedNamespace,
+    isLive, setIsLive, loading, error, setError, resourceLoadWarning,
+    loadResources,
+  } = useKubeResources();
+
+  const { podMetrics, metricsHint, setMetricsHint } = useTopologyMetrics(selectedNamespace, isLive);
+
+  // --- Local UI state ---
   const [showIssuesOnly, setShowIssuesOnly] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [labelFilter, setLabelFilter] = useState("");
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: TopologyNode } | null>(null);
   const [confirmRestart, setConfirmRestart] = useState<TopologyNode | null>(null);
   const [restartTarget, setRestartTarget] = useState<string>("");
-  const [selectedNamespace, setSelectedNamespace] = useState("default");
   const [cronJobWindowHours, setCronJobWindowHours] = useState(24);
-  const [isLive, setIsLive] = useState(false);
   const [showGrid, setShowGrid] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -209,9 +129,8 @@ export function WorkloadTopologyPage() {
   const [logModalNode, setLogModalNode] = useState<TopologyNode | null>(null);
   const [shellModalNode, setShellModalNode] = useState<TopologyNode | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [resourceLoadWarning, setResourceLoadWarning] = useState<string | null>(null);
+
+  // --- Canvas interaction state ---
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [manualPositions, setManualPositions] = useState<Record<string, { x: number; y: number }>>({});
@@ -221,118 +140,9 @@ export function WorkloadTopologyPage() {
   const nodeDragStart = useRef<{ ids: string[]; x: number; y: number; origins: Record<string, { x: number; y: number }>; wasAlreadySelected: boolean; didDrag: boolean } | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const suppressLayoutSave = useRef(false);
-  const liveRefreshInFlight = useRef(false);
-  const prevNodeStatuses = useRef<Map<string, TopologyStatus>>(new Map());
-  const [podMetrics, setPodMetrics] = useState<Map<string, PodMetrics>>(new Map());
-  const [metricsHint, setMetricsHint] = useState<string | null>(null);
-  const [statusToasts, setStatusToasts] = useState<Array<{ id: number; name: string; kind: string; from: TopologyStatus; to: TopologyStatus }>>([]);
-  const toastCounter = useRef(0);
   const [canvasSize, setCanvasSize] = useState<ViewportSize>({ width: 1, height: 1 });
 
-  async function loadResources(options: { silent?: boolean } = {}) {
-    if (!options.silent) {
-      setLoading(true);
-      setError(null);
-    }
-
-    try {
-      const [namespaceList, ingresses, services, deployments, cronJobs, jobs, pods, configMaps, secrets, events] = await Promise.all([
-        listResource<KubeObjectLike>("Namespaces", K8sApi.namespacesApi),
-        listResource<KubeObjectLike>("Ingresses", K8sApi.ingressApi),
-        listResource<KubeObjectLike>("Services", K8sApi.serviceApi),
-        listResource<KubeObjectLike>("Deployments", K8sApi.deploymentApi),
-        listResource<KubeObjectLike>("CronJobs", K8sApi.cronJobApi),
-        listResource<KubeObjectLike>("Jobs", K8sApi.jobApi),
-        listResource<KubeObjectLike>("Pods", K8sApi.podsApi),
-        listResource<KubeObjectLike>("ConfigMaps", K8sApi.configMapApi),
-        listResource<KubeObjectLike>("Secrets", K8sApi.secretsApi),
-        listResource<KubeEventLike>("Events", (K8sApi as any).eventApi ?? (K8sApi as any).eventsApi)
-      ]);
-      const failures = [namespaceList, ingresses, services, deployments, cronJobs, jobs, pods, configMaps, secrets, events]
-        .map((result) => result.error)
-        .filter((message): message is string => Boolean(message));
-
-      const nextNamespaces = namespaceOptions(
-        {
-          ingresses: ingresses.items,
-          services: services.items,
-          deployments: deployments.items,
-          cronJobs: cronJobs.items,
-          jobs: jobs.items,
-          pods: pods.items,
-          configMaps: configMaps.items,
-          secrets: secrets.items,
-          events: events.items
-        },
-        namespaceList.items.map(getName)
-      );
-
-      setResources({
-        ingresses: ingresses.items,
-        services: services.items,
-        deployments: deployments.items,
-        cronJobs: cronJobs.items,
-        jobs: jobs.items,
-        pods: pods.items,
-        configMaps: configMaps.items,
-        secrets: secrets.items,
-        events: events.items
-      });
-      setNamespaces(nextNamespaces);
-      setResourceLoadWarning(failures.length > 0 ? `Some resources could not be loaded: ${failures.join("; ")}` : null);
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Failed to load Kubernetes resources");
-    } finally {
-      if (!options.silent) {
-        setLoading(false);
-      }
-    }
-  }
-
-  useEffect(() => {
-    void loadResources();
-  }, []);
-
-  useEffect(() => {
-    if (!isLive) return;
-
-    const interval = setInterval(() => {
-      if (liveRefreshInFlight.current) {
-        return;
-      }
-
-      liveRefreshInFlight.current = true;
-      void loadResources({ silent: true }).finally(() => {
-        liveRefreshInFlight.current = false;
-      });
-    }, 4000); // Poll every 4 seconds when Live Mode is active
-
-    return () => clearInterval(interval);
-  }, [isLive]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadMetrics() {
-      const result = await fetchPodMetrics(selectedNamespace);
-
-      if (cancelled) return;
-
-      if (result.ok) {
-        setPodMetrics(new Map(result.data.map((m) => [m.podName, m])));
-        setMetricsHint(null);
-      } else {
-        setMetricsHint(result.reason);
-      }
-    }
-
-    void loadMetrics();
-
-    const interval = setInterval(loadMetrics, isLive ? 8000 : 30000);
-
-    return () => { cancelled = true; clearInterval(interval); };
-  }, [selectedNamespace, isLive]);
-
+  // --- Derived topology data ---
   const filteredResources = useMemo(() => filterByNamespace(resources, selectedNamespace), [resources, selectedNamespace]);
   const topology = useMemo(() => buildTopology(filteredResources, cronJobWindowHours), [filteredResources, cronJobWindowHours]);
   const nodeById = useMemo(() => new Map(topology.nodes.map((node) => [node.id, node])), [topology.nodes]);
@@ -346,11 +156,11 @@ export function WorkloadTopologyPage() {
   }, [topology.nodes, manualPositions]);
   const selectedNode = selectedNodeId ? nodeById.get(selectedNodeId) : undefined;
   const selectedNodeEvents = useMemo(() => eventsForNode(filteredResources.events, selectedNode), [filteredResources.events, selectedNode]);
-  const canvasHeight = Math.max(640, topology.nodes.reduce((height, node) => {
+  const canvasHeight = useMemo(() => Math.max(640, topology.nodes.reduce((height, node) => {
     const pos = resolvedPos.get(node.id);
     const y = pos ? pos.y : node.y;
     return Math.max(height, y + cardHeight + 80);
-  }, 0));
+  }, 0)), [topology.nodes, resolvedPos]);
   const resourceCount = visibleResourceCount(filteredResources);
   const availableNamespaces = useMemo(() => namespaceOptions(resources, namespaces), [resources, namespaces]);
   const availableLabels = useMemo(() => {
@@ -448,65 +258,46 @@ export function WorkloadTopologyPage() {
   const dangerCount = useMemo(() => issueNodes.filter((n) => n.status === "danger").length, [issueNodes]);
   const warningCount = useMemo(() => issueNodes.filter((n) => n.status === "warning").length, [issueNodes]);
 
-  useEffect(() => {
-    const prev = prevNodeStatuses.current;
+  // --- Status toasts (extracted hook) ---
+  const { statusToasts } = useStatusToasts(topology.nodes, isLive);
 
-    if (isLive && prev.size > 0) {
-      const newToasts: typeof statusToasts = [];
-
-      for (const node of topology.nodes) {
-        const oldStatus = prev.get(node.id);
-
-        if (oldStatus && oldStatus !== node.status) {
-          toastCounter.current += 1;
-          newToasts.push({ id: toastCounter.current, name: node.name, kind: node.kind, from: oldStatus, to: node.status });
-        }
-      }
-
-      if (newToasts.length > 0) {
-        setStatusToasts((current) => [...current, ...newToasts].slice(-5));
-        const ids = newToasts.map((t) => t.id);
-
-        setTimeout(() => {
-          setStatusToasts((current) => current.filter((t) => !ids.includes(t.id)));
-        }, 5000);
-      }
-    }
-
-    const next = new Map<string, TopologyStatus>();
-
-    for (const node of topology.nodes) {
-      next.set(node.id, node.status);
-    }
-
-    prevNodeStatuses.current = next;
-  }, [topology.nodes, isLive]);
-
+  // --- Issue node filtering (BFS) ---
   const issueNodeIds = useMemo(() => {
     if (!showIssuesOnly) return new Set<string>();
-    
-    const issues = new Set<string>();
-    topology.nodes.forEach(node => {
+
+    const seeds = new Set<string>();
+    for (const node of topology.nodes) {
       if (node.status === "warning" || node.status === "danger") {
-        issues.add(node.id);
+        seeds.add(node.id);
       }
-    });
-    
-    let changed = true;
-    while(changed) {
-      changed = false;
-      topology.edges.forEach(edge => {
-        if (issues.has(edge.from) && !issues.has(edge.to)) {
-          issues.add(edge.to);
-          changed = true;
-        }
-        if (issues.has(edge.to) && !issues.has(edge.from)) {
-          issues.add(edge.from);
-          changed = true;
-        }
-      });
     }
-    return issues;
+
+    // Build adjacency list once, then BFS from seeds — O(V+E)
+    const adj = new Map<string, string[]>();
+    for (const edge of topology.edges) {
+      let list = adj.get(edge.from);
+      if (!list) { list = []; adj.set(edge.from, list); }
+      list.push(edge.to);
+
+      let list2 = adj.get(edge.to);
+      if (!list2) { list2 = []; adj.set(edge.to, list2); }
+      list2.push(edge.from);
+    }
+
+    const visited = new Set<string>(seeds);
+    const queue = [...seeds];
+
+    while (queue.length > 0) {
+      const current = queue.pop()!;
+      for (const neighbor of adj.get(current) ?? []) {
+        if (!visited.has(neighbor)) {
+          visited.add(neighbor);
+          queue.push(neighbor);
+        }
+      }
+    }
+
+    return visited;
   }, [topology, showIssuesOnly]);
   const visibleTopologyNodes = useMemo(
     () => showIssuesOnly ? topology.nodes.filter((node) => issueNodeIds.has(node.id)) : topology.nodes,
@@ -527,6 +318,7 @@ export function WorkloadTopologyPage() {
     }, { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
   }, [visibleTopologyNodes, resolvedPos]);
 
+  // --- Canvas viewport/layout effects ---
   useEffect(() => {
     if (selectedNodeId && !nodeById.has(selectedNodeId)) {
       setSelectedNodeId(null);
@@ -543,63 +335,27 @@ export function WorkloadTopologyPage() {
 
   const searchInputRef = React.useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      const inInput = !!(event.target as HTMLElement)?.closest("input, textarea, select");
-
-      if ((event.metaKey || event.ctrlKey) && event.key === "k") {
-        event.preventDefault();
-        searchInputRef.current?.focus();
-        return;
-      }
-
-      if (event.key === "Escape") {
-        if (showHelp) { setShowHelp(false); return; }
-        if (searchQuery) { setSearchQuery(""); searchInputRef.current?.blur(); return; }
-        if (logModalNode) { setLogModalNode(null); return; }
-        setSelectedNodeId(null);
-        setSelectedNodeIds(new Set());
-        return;
-      }
-
-      if (inInput) return;
-
-      switch (event.key) {
-        case "?": setShowHelp((v) => !v); break;
-        case "g": setShowGrid((v) => !v); break;
-        case "l": setIsLive((v) => !v); break;
-        case ".": void loadResources(); break;
-        case "p": setShowIssuesOnly((v) => !v); break;
-        case "Backspace":
-        case "Delete":
-          if (selectedNodeId || selectedNodeIds.size > 0) {
-            setManualPositions((prev) => {
-              const next = { ...prev };
-              if (selectedNodeId) delete next[selectedNodeId];
-              selectedNodeIds.forEach((id) => delete next[id]);
-              return next;
-            });
-          }
-          break;
-        case "0": setScale(1); setOffset(clampOffsetForScale({ x: 0, y: 0 }, 1)); break;
-        case "-": setScale((s) => {
-          const nextScale = Math.max(0.3, s - 0.1);
-          setOffset((current) => clampOffsetForScale(current, nextScale));
-          return nextScale;
-        }); break;
-        case "=":
-        case "+": setScale((s) => {
-          const nextScale = Math.min(3, s + 0.1);
-          setOffset((current) => clampOffsetForScale(current, nextScale));
-          return nextScale;
-        }); break;
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [logModalNode, searchQuery, showHelp, selectedNodeId, selectedNodeIds]);
+  // --- Keyboard handler (extracted hook — stable useCallback, no memory leak) ---
+  useTopologyKeyboard(
+    { logModalNode, searchQuery, showHelp, selectedNodeId, selectedNodeIds },
+    {
+      setShowHelp,
+      setSearchQuery,
+      setLogModalNode: () => setLogModalNode(null),
+      setSelectedNodeId,
+      setSelectedNodeIds,
+      setShowGrid,
+      setIsLive,
+      setShowIssuesOnly,
+      setManualPositions,
+      setScale,
+      setOffset,
+      clampOffsetForScale,
+      loadResources: () => void loadResources(),
+      focusSearchInput: () => searchInputRef.current?.focus(),
+      blurSearchInput: () => searchInputRef.current?.blur(),
+    },
+  );
 
   useEffect(() => {
     setManualPositions((current) => {
@@ -643,10 +399,15 @@ export function WorkloadTopologyPage() {
     return () => resizeObserver.disconnect();
   }, []);
 
+  // --- Helper functions ---
   async function handleCopy(label: string, value: string) {
-    await copyText(value);
-    setCopied(label);
-    window.setTimeout(() => setCopied(null), 1600);
+    try {
+      await copyText(value);
+      setCopied(label);
+      window.setTimeout(() => setCopied(null), 1600);
+    } catch {
+      setError("Clipboard copy failed. Try copying from the JSON or YAML tab manually.");
+    }
   }
 
   function buildContextMenuItems(node: TopologyNode): ContextMenuItem[] {
@@ -981,8 +742,8 @@ export function WorkloadTopologyPage() {
           >
             Problems Only
           </button>
-          <button 
-            type="button" 
+          <button
+            type="button"
             onClick={() => setIsLive(prev => !prev)}
             style={{
               display: "flex",
@@ -994,16 +755,16 @@ export function WorkloadTopologyPage() {
               fontWeight: isLive ? 600 : 400
             }}
           >
-            <span style={{ 
-              width: "8px", 
-              height: "8px", 
-              borderRadius: "50%", 
+            <span style={{
+              width: "8px",
+              height: "8px",
+              borderRadius: "50%",
               background: isLive ? "#1fbf66" : "currentColor",
               opacity: isLive ? 1 : 0.4
             }} />
             Live
           </button>
-          
+
           <button
             type="button"
             onClick={() => void loadResources()}
@@ -1229,7 +990,7 @@ export function WorkloadTopologyPage() {
               />
             ) : null}
           </div>
-          
+
           <div className="TopologyZoomControls">
             <button
               type="button"

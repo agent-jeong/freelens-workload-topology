@@ -1,11 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Renderer } from "@freelensapp/extensions";
 import type { KubeObjectLike, PodLogEntry, PodLogLine, PodLogOptions, TopologyNode } from "../../types";
-import { getName, getNamespace } from "../../utils/kube";
+import { getName, getNamespace, kubeApiBase } from "../../utils/kube";
 import { VirtualLogList } from "./VirtualLogList";
 import { logLines, logMessageKey, podLogTargets } from "./logParser";
-
-const { K8sApi } = Renderer;
 
 const LOG_BUFFER_LINES = 20000;
 const RANGE_LINE_LIMIT_OPTIONS = [50000, 100000, 200000, 0] as const;
@@ -296,8 +293,7 @@ async function fetchPodLogEntry(pod: KubeObjectLike, containerName: string, opti
   const namespace = getNamespace(pod);
 
   try {
-    const api = K8sApi.podsApi as any;
-    const apiBase = api.request?.config?.apiBase ?? "/api-kube";
+    const apiBase = kubeApiBase();
     const params = new URLSearchParams({
       timestamps: "true",
       previous: String(Boolean(options.previous))
@@ -896,12 +892,16 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
     }
   }
 
+  const matchCountRef = useRef(matchCount);
+  matchCountRef.current = matchCount;
+
   useEffect(() => {
     if (!hasActiveSearch || matchCount === 0) {
       return;
     }
 
     function handleKeyDown(event: KeyboardEvent) {
+      if (matchCountRef.current === 0) return;
       if (event.key === "ArrowUp") {
         event.preventDefault();
         moveMatch(-1);
@@ -916,13 +916,18 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [hasActiveSearch, matchCount]);
 
+  const escStateRef = useRef({ chipMenuOpen, orTarget, hiddenMenuOpen, podFilterOpen, containerFilterOpen, severityFilterOpen, rangeOpen, fullscreen });
+  escStateRef.current = { chipMenuOpen, orTarget, hiddenMenuOpen, podFilterOpen, containerFilterOpen, severityFilterOpen, rangeOpen, fullscreen };
+
   useEffect(() => {
     function stopEscForParent(event: KeyboardEvent) {
       if (event.key !== "Escape") {
         return;
       }
 
-      if (chipMenuOpen !== null) {
+      const s = escStateRef.current;
+
+      if (s.chipMenuOpen !== null) {
         event.preventDefault();
         event.stopPropagation();
         event.stopImmediatePropagation();
@@ -930,7 +935,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
         return;
       }
 
-      if (orTarget !== null) {
+      if (s.orTarget !== null) {
         event.preventDefault();
         event.stopPropagation();
         event.stopImmediatePropagation();
@@ -938,7 +943,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
         return;
       }
 
-      if (hiddenMenuOpen) {
+      if (s.hiddenMenuOpen) {
         event.preventDefault();
         event.stopPropagation();
         event.stopImmediatePropagation();
@@ -946,7 +951,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
         return;
       }
 
-      if (podFilterOpen) {
+      if (s.podFilterOpen) {
         event.preventDefault();
         event.stopPropagation();
         event.stopImmediatePropagation();
@@ -954,7 +959,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
         return;
       }
 
-      if (containerFilterOpen) {
+      if (s.containerFilterOpen) {
         event.preventDefault();
         event.stopPropagation();
         event.stopImmediatePropagation();
@@ -962,7 +967,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
         return;
       }
 
-      if (severityFilterOpen) {
+      if (s.severityFilterOpen) {
         event.preventDefault();
         event.stopPropagation();
         event.stopImmediatePropagation();
@@ -970,7 +975,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
         return;
       }
 
-      if (rangeOpen) {
+      if (s.rangeOpen) {
         event.preventDefault();
         event.stopPropagation();
         event.stopImmediatePropagation();
@@ -978,7 +983,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
         return;
       }
 
-      if (fullscreen) {
+      if (s.fullscreen) {
         event.preventDefault();
         event.stopPropagation();
         event.stopImmediatePropagation();
@@ -989,7 +994,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
     document.addEventListener("keydown", stopEscForParent, true);
 
     return () => document.removeEventListener("keydown", stopEscForParent, true);
-  }, [rangeOpen, orTarget, fullscreen, chipMenuOpen, hiddenMenuOpen, podFilterOpen, containerFilterOpen, severityFilterOpen]);
+  }, []);
 
   return (
     <div className="PodLogsModal__backdrop" onMouseDown={onClose}>

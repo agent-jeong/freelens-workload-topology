@@ -163,6 +163,24 @@ export function visibleResourceCount(resources: ResourceSet): number {
   );
 }
 
+/**
+ * Extract the API base URL from the FreeLens pods API proxy.
+ * FreeLens does not export stable types for these internals, so this
+ * helper isolates the unavoidable cast in a single place.
+ */
+export function kubeApiBase(): string {
+  const api = K8sApi.podsApi as any;
+  return api.request?.config?.apiBase ?? "/api-kube";
+}
+
+/**
+ * Return the events API reference. FreeLens changed the property name
+ * across versions, so we try both.
+ */
+export function eventsApi(): { list: () => Promise<unknown> } | undefined {
+  return (K8sApi as any).eventApi ?? (K8sApi as any).eventsApi;
+}
+
 export function apiForKind(kind: TopologyKind): KubeApiLike {
   switch (kind) {
     case "Ingress":

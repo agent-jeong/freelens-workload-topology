@@ -62,30 +62,33 @@ export function CodeEditorWithLines({ value, readOnly, onChange }: { value: stri
     }
   }, [searchQuery, searchOpen]);
 
-  useEffect(() => {
-    function handleKeyDown(event: KeyboardEvent) {
-      const isMod = event.metaKey || event.ctrlKey;
+  const searchOpenRef = useRef(searchOpen);
+  searchOpenRef.current = searchOpen;
 
-      if (isMod && event.key === "f") {
-        event.preventDefault();
-        setSearchOpen(true);
-        setTimeout(() => searchInputRef.current?.focus(), 0);
-      }
+  const handleContainerKeyDown = useCallback((event: KeyboardEvent) => {
+    const isMod = event.metaKey || event.ctrlKey;
 
-      if (event.key === "Escape" && searchOpen) {
-        event.preventDefault();
-        event.stopPropagation();
-        setSearchOpen(false);
-        setSearchQuery("");
-      }
+    if (isMod && event.key === "f") {
+      event.preventDefault();
+      setSearchOpen(true);
+      setTimeout(() => searchInputRef.current?.focus(), 0);
     }
 
+    if (event.key === "Escape" && searchOpenRef.current) {
+      event.preventDefault();
+      event.stopPropagation();
+      setSearchOpen(false);
+      setSearchQuery("");
+    }
+  }, []);
+
+  useEffect(() => {
     const container = textareaRef.current?.closest(".CodeEditor");
     if (!container) return;
 
-    container.addEventListener("keydown", handleKeyDown as EventListener, true);
-    return () => container.removeEventListener("keydown", handleKeyDown as EventListener, true);
-  }, [searchOpen]);
+    container.addEventListener("keydown", handleContainerKeyDown as EventListener, true);
+    return () => container.removeEventListener("keydown", handleContainerKeyDown as EventListener, true);
+  }, [handleContainerKeyDown]);
 
   // Also capture Esc on the panel level to prevent closing detail panel
   useEffect(() => {
