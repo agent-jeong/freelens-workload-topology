@@ -16,7 +16,7 @@ async function listResource<T>(label: string, api?: { list: () => Promise<unknow
       return { items: [], error: `${label}: API is not available` };
     }
 
-    return { items: await api.list() as T[] };
+    return { items: (await api.list() ?? []) as T[] };
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown error";
 
@@ -43,8 +43,11 @@ export function useKubeResources() {
   const [error, setError] = useState<string | null>(null);
   const [resourceLoadWarning, setResourceLoadWarning] = useState<string | null>(null);
   const liveRefreshInFlight = useRef(false);
+  const loadRequestSeq = useRef(0);
 
   async function loadResources(options: { silent?: boolean } = {}) {
+    const requestSeq = ++loadRequestSeq.current;
+
     if (!options.silent) {
       setLoading(true);
       setError(null);
@@ -82,23 +85,27 @@ export function useKubeResources() {
         namespaceList.items.map(getName)
       );
 
-      setResources({
-        ingresses: ingresses.items,
-        services: services.items,
-        deployments: deployments.items,
-        cronJobs: cronJobs.items,
-        jobs: jobs.items,
-        pods: pods.items,
-        configMaps: configMaps.items,
-        secrets: secrets.items,
-        events: events.items
-      });
-      setNamespaces(nextNamespaces);
-      setResourceLoadWarning(failures.length > 0 ? `Some resources could not be loaded: ${failures.join("; ")}` : null);
+      if (requestSeq === loadRequestSeq.current) {
+        setResources({
+          ingresses: ingresses.items,
+          services: services.items,
+          deployments: deployments.items,
+          cronJobs: cronJobs.items,
+          jobs: jobs.items,
+          pods: pods.items,
+          configMaps: configMaps.items,
+          secrets: secrets.items,
+          events: events.items
+        });
+        setNamespaces(nextNamespaces);
+        setResourceLoadWarning(failures.length > 0 ? `Some resources could not be loaded: ${failures.join("; ")}` : null);
+      }
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Failed to load Kubernetes resources");
+      if (requestSeq === loadRequestSeq.current) {
+        setError(loadError instanceof Error ? loadError.message : "Failed to load Kubernetes resources");
+      }
     } finally {
-      if (!options.silent) {
+      if (requestSeq === loadRequestSeq.current) {
         setLoading(false);
       }
     }

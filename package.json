@@ -22,7 +22,8 @@
   ],
   "scripts": {
     "build": "electron-vite build",
-    "type:check": "tsc --noEmit -p tsconfig.json --composite false"
+    "type:check": "tsc --noEmit -p tsconfig.json --composite false",
+    "test": "rm -rf .test-out && tsc -p tsconfig.test.json && node --test .test-out/topology/status.test.js"
   },
   "devDependencies": {
     "@freelensapp/extensions": "^1.6.1",

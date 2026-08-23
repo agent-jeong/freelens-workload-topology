@@ -9,6 +9,7 @@ export type KubeObjectLike = {
   metadata?: {
     name?: string;
     namespace?: string;
+    uid?: string;
     labels?: Record<string, string>;
     creationTimestamp?: string;
     ownerReferences?: Array<{ kind?: string; name?: string }>;
@@ -109,7 +110,7 @@ export type ViewportSize = {
 
 export type KubeApiLike = {
   update: (descriptor: { name: string; namespace?: string }, data: any) => Promise<unknown>;
-  delete: (descriptor: { name: string; namespace?: string }) => Promise<unknown>;
+  delete: (descriptor: { name: string; namespace?: string; deleteOptions?: { preconditions?: { uid?: string } } }) => Promise<unknown>;
 };
 
 export type PodLogEntry = {

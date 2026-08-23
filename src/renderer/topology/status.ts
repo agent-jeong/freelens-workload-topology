@@ -1,19 +1,34 @@
 import type { KubeObjectLike, TopologyStatus } from "../types";
-import { labelsMatch, deploymentTemplateLabels, getLabels, serviceSelector } from "../utils/kube";
+
+function getLabels(object: KubeObjectLike): Record<string, string> | undefined {
+  return object.metadata?.labels;
+}
+
+function labelsMatch(selector: Record<string, string> | undefined, labels: Record<string, string> | undefined): boolean {
+  const entries = Object.entries(selector ?? {});
+
+  return entries.length > 0 && entries.every(([key, value]) => labels?.[key] === value);
+}
+
+function serviceSelector(service: KubeObjectLike): Record<string, string> | undefined {
+  return service.spec?.selector;
+}
 
 export function podStatus(pod: KubeObjectLike): TopologyStatus {
-  const status = pod.getStatus?.() ?? pod.status?.phase ?? "Unknown";
-  const waitingReason = pod.status?.containerStatuses?.find((container: any) => container.state?.waiting?.reason)?.state?.waiting?.reason;
+  const phase = pod.status?.phase ?? pod.getStatus?.() ?? "Unknown";
+  const statuses = [...(pod.status?.initContainerStatuses ?? []), ...(pod.status?.containerStatuses ?? [])];
+  const waitingReason = statuses.find((container: any) => container.state?.waiting?.reason)?.state?.waiting?.reason;
+  const terminated = statuses.find((container: any) => container.state?.terminated?.reason && container.state.terminated.reason !== "Completed")?.state?.terminated;
 
-  if (waitingReason === "CrashLoopBackOff" || status === "Failed") {
+  if (waitingReason === "CrashLoopBackOff" || waitingReason === "ImagePullBackOff" || waitingReason === "ErrImagePull" || phase === "Failed" || terminated?.exitCode > 0) {
     return "danger";
   }
 
-  if (status === "Running" || status === "Succeeded") {
+  if (phase === "Running" || phase === "Succeeded") {
     return "healthy";
   }
 
-  if (status === "Pending" || status === "ContainerCreating") {
+  if (phase === "Pending" || waitingReason) {
     return "warning";
   }
 
@@ -36,18 +51,20 @@ export function deploymentStatus(deployment: KubeObjectLike): TopologyStatus {
   return "danger";
 }
 
-export function serviceStatus(service: KubeObjectLike, deployments: KubeObjectLike[], pods: KubeObjectLike[]): TopologyStatus {
+export function serviceStatus(service: KubeObjectLike, pods: KubeObjectLike[]): TopologyStatus {
   const selector = serviceSelector(service);
 
   if (!selector || Object.keys(selector).length === 0) {
     return "healthy";
   }
 
-  const hasTarget =
-    deployments.some((deployment) => labelsMatch(selector, deploymentTemplateLabels(deployment))) ||
-    pods.some((pod) => labelsMatch(selector, getLabels(pod)));
+  const hasTarget = pods.some((pod) => labelsMatch(selector, getLabels(pod)) && isPodReady(pod));
 
   return hasTarget ? "healthy" : "warning";
+}
+
+export function isPodReady(pod: KubeObjectLike): boolean {
+  return pod.status?.phase === "Running" && (pod.status?.conditions ?? []).some((condition: any) => condition.type === "Ready" && condition.status === "True");
 }
 
 export function summarizePodGroupStatus(pods: KubeObjectLike[]): TopologyStatus {

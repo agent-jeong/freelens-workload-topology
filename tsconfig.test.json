@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "noEmit": false,
+    "outDir": ".test-out"
+  },
+  "include": [
+    "src/**/*.test.ts",
+    "src/renderer/topology/status.ts",
+    "src/renderer/types.ts"
+  ]
+}

@@ -397,6 +397,7 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
   const olderBaselineLineCountRef = useRef<number | null>(null);
   const olderLoadRequestedRef = useRef(false);
   const rangeLineLimitRef = useRef<RangeLineLimit>(rangeLineLimit);
+  const incrementalInFlightRef = useRef(false);
   const modalRef = useRef<HTMLElement | null>(null);
   const podFilterRef = useRef<HTMLDivElement | null>(null);
   const containerFilterRef = useRef<HTMLDivElement | null>(null);
@@ -493,45 +494,58 @@ export function PodLogsModal({ node, onClose }: { node: TopologyNode; onClose: (
     }
 
     async function loadIncremental() {
-      const sinceTime = lastTimestampRef.current;
-      if (!sinceTime) {
-        await loadLogs(false);
+      if (incrementalInFlightRef.current) {
         return;
       }
 
-      const newEntries = await mapWithConcurrency(
-        visibleTargets,
-        LOG_FETCH_CONCURRENCY,
-        ({ pod, containerName }) => fetchPodLogEntry(pod, containerName, { tailLines: requestedTailLines, previous, sinceTime })
-      );
+      incrementalInFlightRef.current = true;
+      const sinceTime = lastTimestampRef.current;
 
-      if (cancelled) return;
+      try {
+        if (!sinceTime) {
+          await loadLogs(false);
+          return;
+        }
 
-      let latest = sinceTime;
-      for (const entry of newEntries) {
-        latest = latestTimestampFromText(entry.text, latest);
-      }
-      if (latest > sinceTime) lastTimestampRef.current = latest;
+        const newEntries = await mapWithConcurrency(
+          visibleTargets,
+          LOG_FETCH_CONCURRENCY,
+          ({ pod, containerName }) => fetchPodLogEntry(pod, containerName, { tailLines: requestedTailLines, previous, sinceTime })
+        );
 
-      const hasNewData = newEntries.some((entry) => entry.text.trim().length > 0);
-      if (!hasNewData) return;
+        if (cancelled) return;
 
-      setEntries((prev) => {
-        const appended = prev.map((existing, i) => {
-          const newEntry = newEntries[i];
-          if (!newEntry || !newEntry.text.trim()) return existing;
+        let latest = sinceTime;
+        for (const entry of newEntries) {
+          latest = latestTimestampFromText(entry.text, latest);
+        }
+        if (latest > sinceTime) lastTimestampRef.current = latest;
 
-          const text = appendIncrementalText(existing.text, newEntry.text);
+        const hasNewData = newEntries.some((entry) => entry.text.trim().length > 0);
+        if (!hasNewData) return;
 
-          return text === existing.text ? existing : { ...existing, text };
+        setEntries((prev) => {
+          const appended = prev.map((existing, i) => {
+            const newEntry = newEntries[i];
+            if (!newEntry || !newEntry.text.trim()) return existing;
+
+            const text = appendIncrementalText(existing.text, newEntry.text);
+
+            return text === existing.text ? existing : { ...existing, text };
+          });
+          const currentLineLimit = rangeLineLimitRef.current;
+          const maxLoadedLines = currentLineLimit === 0 ? null : Math.min(currentLineLimit, Math.max(LOG_BUFFER_LINES, loadedTailLines));
+          return maxLoadedLines ? trimEntriesToLineLimit(appended, maxLoadedLines) : appended;
         });
-        const currentLineLimit = rangeLineLimitRef.current;
-        const maxLoadedLines = currentLineLimit === 0 ? null : Math.min(currentLineLimit, Math.max(LOG_BUFFER_LINES, loadedTailLines));
-        return maxLoadedLines ? trimEntriesToLineLimit(appended, maxLoadedLines) : appended;
-      });
+      } finally {
+        incrementalInFlightRef.current = false;
+      }
     }
 
-    void loadLogs(true);
+    incrementalInFlightRef.current = true;
+    void loadLogs(true).finally(() => {
+      incrementalInFlightRef.current = false;
+    });
 
     if (live && !previous) {
       const interval = window.setInterval(() => void loadIncremental(), 3000);

@@ -466,13 +466,13 @@ export function buildTopology(resources: ResourceSet, cronJobWindowHours: number
       kind: "Service",
       name: getName(service),
       namespace: getNamespace(service),
-      status: serviceStatus(service, deployments, pods),
+      status: serviceStatus(service, pods),
       statusText: service.spec?.type ?? "ClusterIP",
       x: columnX.Service,
       y: yFor(row, "Service"),
       object: service,
       editable: true,
-      problems: serviceProblemReasons(service, deployments, pods)
+      problems: serviceProblemReasons(service, pods)
     });
   });
 

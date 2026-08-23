@@ -15,5 +15,7 @@ export function readStoredLayout(namespace: string): Record<string, { x: number;
 }
 
 export function writeStoredLayout(namespace: string, positions: Record<string, { x: number; y: number }>) {
-  window.localStorage.setItem(layoutStorageKey(namespace), JSON.stringify(positions));
+  try {
+    window.localStorage.setItem(layoutStorageKey(namespace), JSON.stringify(positions));
+  } catch {}
 }

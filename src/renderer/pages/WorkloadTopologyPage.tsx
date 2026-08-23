@@ -224,17 +224,27 @@ export function WorkloadTopologyPage() {
     return topology.nodes.filter((n) => searchMatchIds.has(n.id));
   }, [searchMatchIds, topology.nodes]);
   const [searchMatchIndex, setSearchMatchIndex] = useState(0);
+  const previousSearchQuery = useRef("");
 
   useEffect(() => {
-    setSearchMatchIndex(0);
-    if (searchMatchList.length > 0) {
+    const query = searchQuery.trim().toLowerCase();
+    const queryChanged = query !== previousSearchQuery.current;
+    previousSearchQuery.current = query;
+
+    if (queryChanged) {
+      setSearchMatchIndex(0);
+    } else if (searchMatchIndex >= searchMatchList.length) {
+      setSearchMatchIndex(Math.max(0, searchMatchList.length - 1));
+    }
+
+    if (queryChanged && searchMatchList.length > 0) {
       const first = searchMatchList[0];
       const pos = resolvedPos.get(first.id);
       const nx = pos ? pos.x : first.x;
       const ny = pos ? pos.y : first.y;
       navigateToCanvasPoint(nx + cardWidth / 2, ny + cardHeight / 2);
     }
-  }, [searchMatchList]);
+  }, [searchQuery, searchMatchList, searchMatchIndex, resolvedPos]);
 
   const edgePaths = useMemo(() => topology.edges.map((edge) => {
     const fromPos = resolvedPos.get(edge.from);
@@ -1075,11 +1085,12 @@ export function WorkloadTopologyPage() {
       ) : null}
       {confirmRestart ? (() => {
         const isGroup = confirmRestart.kind === "Pods" && confirmRestart.pods?.length;
-        const pods = isGroup ? confirmRestart.pods! : [];
+        const pods = isGroup ? confirmRestart.pods! : confirmRestart.object ? [confirmRestart.object] : [];
         const targetName = isGroup ? restartTarget : confirmRestart.name;
+        const targetPod = pods.find((p) => getName(p) === targetName);
         const targetNamespace = isGroup
-          ? (pods.find((p) => getName(p) === restartTarget)
-              ? getNamespace(pods.find((p) => getName(p) === restartTarget)!)
+          ? (targetPod
+              ? getNamespace(targetPod)
               : confirmRestart.namespace)
           : confirmRestart.namespace;
 
@@ -1112,7 +1123,11 @@ export function WorkloadTopologyPage() {
                   setRestartTarget("");
                   void (async () => {
                     try {
-                      await K8sApi.podsApi.delete({ name: targetName, namespace: targetNamespace });
+                      await K8sApi.podsApi.delete({
+                        name: targetName,
+                        namespace: targetNamespace,
+                        ...(targetPod?.metadata?.uid ? { deleteOptions: { preconditions: { uid: targetPod.metadata.uid } } } : {})
+                      });
                       setCopied(`Restarted ${targetName}`);
                       setTimeout(() => setCopied(null), 2000);
                       void loadResources({ silent: true });

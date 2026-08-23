@@ -1,6 +1,7 @@
 import type { KubeObjectLike, KubeEventLike, TopologyStatus, ProblemReason, CauseHint } from "../types";
-import { getName, getLabels, labelsMatch, serviceSelector, deploymentTemplateLabels, ingressServiceNames, getNamespace } from "../utils/kube";
+import { getName, getLabels, labelsMatch, serviceSelector, ingressServiceNames, getNamespace } from "../utils/kube";
 import { eventData } from "../utils/events";
+import { isPodReady } from "./status";
 
 export function uniqueProblems(problems: ProblemReason[]): ProblemReason[] {
   const seen = new Set<string>();
@@ -19,7 +20,7 @@ export function uniqueProblems(problems: ProblemReason[]): ProblemReason[] {
 
 export function podProblemReasons(pod: KubeObjectLike): ProblemReason[] {
   const problems: ProblemReason[] = [];
-  const status = pod.getStatus?.() ?? pod.status?.phase ?? "Unknown";
+  const status = pod.status?.phase ?? pod.getStatus?.() ?? "Unknown";
 
   if (status === "Failed") {
     problems.push({ severity: "danger", message: "Pod phase is Failed" });
@@ -27,13 +28,13 @@ export function podProblemReasons(pod: KubeObjectLike): ProblemReason[] {
     problems.push({ severity: "warning", message: `Pod is ${status}` });
   }
 
-  for (const container of pod.status?.containerStatuses ?? []) {
+  for (const container of [...(pod.status?.initContainerStatuses ?? []), ...(pod.status?.containerStatuses ?? [])]) {
     const waiting = container.state?.waiting;
     const terminated = container.state?.terminated;
 
     if (waiting?.reason) {
       problems.push({
-        severity: waiting.reason === "CrashLoopBackOff" ? "danger" : "warning",
+        severity: ["CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull"].includes(waiting.reason) ? "danger" : "warning",
         message: `${container.name ?? "container"} waiting: ${waiting.reason}${waiting.message ? ` - ${waiting.message}` : ""}`
       });
     }
@@ -81,7 +82,7 @@ export function deploymentProblemReasons(deployment: KubeObjectLike): ProblemRea
   return uniqueProblems(problems);
 }
 
-export function serviceProblemReasons(service: KubeObjectLike, deployments: KubeObjectLike[], pods: KubeObjectLike[]): ProblemReason[] {
+export function serviceProblemReasons(service: KubeObjectLike, pods: KubeObjectLike[]): ProblemReason[] {
   const selector = serviceSelector(service);
 
   if (!selector || Object.keys(selector).length === 0) {
@@ -89,14 +90,13 @@ export function serviceProblemReasons(service: KubeObjectLike, deployments: Kube
   }
 
   const hasTarget =
-    deployments.some((deployment) => labelsMatch(selector, deploymentTemplateLabels(deployment))) ||
-    pods.some((pod) => labelsMatch(selector, getLabels(pod)));
+    pods.some((pod) => labelsMatch(selector, getLabels(pod)) && isPodReady(pod));
 
   if (hasTarget) {
     return [];
   }
 
-  return [{ severity: "warning", message: "No Deployment or Pod matches this Service selector" }];
+  return [{ severity: "warning", message: "No ready Pod matches this Service selector" }];
 }
 
 export function ingressProblemReasons(ingress: KubeObjectLike, services: KubeObjectLike[]): ProblemReason[] {
